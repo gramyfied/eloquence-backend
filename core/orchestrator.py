@@ -852,6 +852,38 @@ async def _create_default_participants(self, db: AsyncSession, db_session: Coach
                 session.current_llm_task.cancel()
             del self.sessions[session_id]
 
+    async def generate_exercise(self, exercise_type: str, topic: Optional[str] = None, difficulty: Optional[str] = "moyen", length: Optional[str] = "court") -> str:
+        """
+        Génère le texte pour un exercice de coaching en utilisant le LLM.
+
+        Args:
+            exercise_type (str): Type d'exercice.
+            topic (Optional[str]): Sujet de l'exercice.
+            difficulty (Optional[str]): Difficulté de l'exercice.
+            length (Optional[str]): Longueur souhaitée du texte.
+
+        Returns:
+            str: Le texte généré pour l'exercice.
+        
+        Raises:
+            Exception: Si la génération échoue.
+        """
+        logger.info(f"Demande de génération d'exercice: type={exercise_type}, topic={topic}, difficulty={difficulty}, length={length}")
+        try:
+            # Utiliser la nouvelle méthode du LlmService
+            exercise_text = await self.llm_service.generate_exercise_text(
+                exercise_type=exercise_type,
+                topic=topic,
+                difficulty=difficulty,
+                length=length
+            )
+            logger.info(f"Texte d'exercice généré avec succès.")
+            return exercise_text
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération de l'exercice '{exercise_type}': {e}", exc_info=True)
+            # Remonter l'exception pour que la route API puisse retourner une erreur 500
+            raise Exception(f"Impossible de générer le texte pour l'exercice: {e}")
+
 
 # Instance globale de l'orchestrateur
 orchestrator = Orchestrator()

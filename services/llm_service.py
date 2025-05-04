@@ -386,3 +386,83 @@ class LlmService:
                         return {"next_step": next_step}
         
         return None
+
+    async def generate_exercise_text(self, exercise_type: str, topic: Optional[str] = None, difficulty: Optional[str] = "moyen", length: Optional[str] = "court") -> str:
+        """
+        Génère un texte spécifique pour un exercice de coaching.
+
+        Args:
+            exercise_type (str): Le type d'exercice (ex: "diction", "lecture", "jeu_de_role_situation").
+            topic (Optional[str]): Le sujet ou thème de l'exercice (ex: "voyage", "technologie").
+            difficulty (Optional[str]): Le niveau de difficulté (ex: "facile", "moyen", "difficile").
+            length (Optional[str]): La longueur souhaitée du texte (ex: "très court", "court", "moyen", "long").
+
+        Returns:
+            str: Le texte généré pour l'exercice.
+        """
+        # Construire un prompt spécifique pour la génération d'exercice
+        prompt = f"Génère un texte en français pour un exercice de coaching vocal de type '{exercise_type}'.\n"
+        if topic:
+            prompt += f"Le sujet est '{topic}'.\n"
+        prompt += f"Le niveau de difficulté souhaité est '{difficulty}'.\n"
+        prompt += f"La longueur souhaitée est '{length}'.\n"
+        
+        if exercise_type == "diction":
+            prompt += "Le texte doit contenir des mots ou des phrases spécifiquement choisis pour travailler la diction (ex: allitérations, assonances, sons difficiles en français).\n"
+        elif exercise_type == "lecture":
+            prompt += "Le texte doit être adapté à une lecture à voix haute, avec une structure narrative ou informative claire.\n"
+        elif exercise_type == "jeu_de_role_situation":
+            prompt += "Décris une situation de jeu de rôle pour un exercice d'improvisation ou de communication. Fournis le contexte et le rôle de l'utilisateur.\n"
+        # Ajouter d'autres types d'exercices si nécessaire
+        
+        prompt += "Ne génère que le texte de l'exercice lui-même, sans introduction ni conclusion supplémentaire, et sans ajouter d'étiquette d'émotion ou de mise à jour de scénario."
+
+        headers = {'Content-Type': 'application/json'}
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": self.max_tokens * 2, # Permettre des textes potentiellement plus longs pour les exercices
+                "temperature": self.temperature,
+                "stop": ["\nuser:", "\nassistant:"] # Séquences d'arrêt
+            }
+        }
+        logger.debug(f"Envoi de la requête LLM (exercice) à {self.api_url} avec le payload: {json.dumps(payload, indent=2)}")
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(self.api_url, headers=headers, json=payload) as response:
+                    response_status = response.status
+                    response_text = await response.text()
+
+                    if response_status == 200:
+                        response_data = json.loads(response_text)
+                        logger.debug(f"Réponse LLM (exercice) reçue: {json.dumps(response_data, indent=2)}")
+                        
+                        generated_text = response_data.get("generated_text", "")
+                        if not generated_text and isinstance(response_data, list):
+                             generated_text = response_data[0].get("generated_text", "")
+
+                        if not generated_text:
+                             logger.error(f"Réponse LLM (exercice) invalide: {response_text}")
+                             raise ValueError("Format de réponse LLM invalide pour l'exercice")
+                             
+                        # Nettoyer le texte généré (peut contenir des artefacts du prompt)
+                        # Simple nettoyage pour l'instant
+                        cleaned_text = generated_text.strip()
+                        
+                        return cleaned_text
+                    else:
+                        logger.error(f"Erreur API LLM ({response_status}) pour exercice: {response_text}")
+                        raise aiohttp.ClientResponseError(
+                            response.request_info, response.history, status=response_status,
+                            message=f"Erreur API LLM exercice: {response_text}", headers=response.headers
+                        )
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout lors de l'appel à l'API LLM (exercice)")
+            raise TimeoutError("Timeout API LLM exercice")
+        except aiohttp.ClientError as e:
+            logger.error(f"Erreur client HTTP lors de l'appel LLM (exercice): {e}", exc_info=True)
+            raise ConnectionError(f"Erreur de connexion API LLM exercice: {e}")
+        except Exception as e:
+            logger.error(f"Erreur inattendue lors de la génération LLM (exercice): {e}", exc_info=True)
+            raise RuntimeError(f"Erreur LLM exercice: {e}")

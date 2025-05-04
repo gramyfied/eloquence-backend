@@ -1,7 +1,11 @@
 import logging
 import uuid
 import datetime
+import logging
+import uuid
+import datetime
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field # Ajout de BaseModel et Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Optional, Dict, Any, List
@@ -11,9 +15,20 @@ from core.models import CoachingSession, SessionTurn, ScenarioTemplate
 from core.orchestrator import orchestrator
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(prefix="/coaching", tags=["Coaching"]) # Ajout d'un préfixe pour clarté
 
-@router.post("/init", tags=["Coaching"])
+# --- Modèles Pydantic ---
+class ExerciseRequest(BaseModel):
+    exercise_type: str = Field(..., description="Type d'exercice (ex: diction, lecture, jeu_de_role_situation)")
+    topic: Optional[str] = Field(None, description="Sujet ou thème de l'exercice")
+    difficulty: Optional[str] = Field("moyen", description="Niveau de difficulté (ex: facile, moyen, difficile)")
+    length: Optional[str] = Field("court", description="Longueur souhaitée (ex: très court, court, moyen, long)")
+
+class ExerciseResponse(BaseModel):
+    exercise_text: str
+
+# --- Routes existantes ---
+@router.post("/init")
 async def init_session(
     user_id: str,
     language: Optional[str] = "français",
@@ -216,3 +231,29 @@ async def end_session(
     except Exception as e:
         logger.error(f"Erreur lors de la fin de la session: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur lors de la fin de la session: {str(e)}")
+
+# --- Nouvelle route pour la génération d'exercices ---
+@router.post("/exercise/generate", response_model=ExerciseResponse)
+async def generate_exercise_text_endpoint(
+    request_data: ExerciseRequest
+):
+    """
+    Génère le texte pour un exercice de coaching spécifique en utilisant l'IA.
+    """
+    try:
+        logger.info(f"Requête API pour générer un exercice: {request_data.dict()}")
+        
+        # Appeler la méthode de l'orchestrateur
+        exercise_text = await orchestrator.generate_exercise(
+            exercise_type=request_data.exercise_type,
+            topic=request_data.topic,
+            difficulty=request_data.difficulty,
+            length=request_data.length
+        )
+        
+        return ExerciseResponse(exercise_text=exercise_text)
+        
+    except Exception as e:
+        logger.error(f"Erreur API lors de la génération de l'exercice: {e}", exc_info=True)
+        # Remonter une erreur HTTP 500
+        raise HTTPException(status_code=500, detail=f"Erreur interne lors de la génération de l'exercice: {str(e)}")
