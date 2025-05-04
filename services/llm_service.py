@@ -19,15 +19,14 @@ class LlmService:
     Gère également la continuité de la conversation après les interruptions.
     """
     def __init__(self):
-        # Utiliser l'URL locale pour vLLM/TGI par défaut
-        self.api_url = settings.LLM_LOCAL_API_URL
-        # self.api_key = settings.LLM_API_KEY # Non nécessaire pour API locale
-        # self.model_name = settings.LLM_MODEL_NAME # Souvent non nécessaire dans le payload pour vLLM/TGI
+        # Utiliser l'URL de l'API Scaleway Mistral
+        self.api_url = "https://api.scaleway.ai/18f6cc9d-07fc-49c3-a142-67be9b59ac63/v1/chat/completions"
+        self.api_key = settings.SCW_LLM_API_KEY # Clé API Scaleway
+        self.model_name = "mistral-nemo-instruct-2407" # Modèle Scaleway
         self.temperature = settings.LLM_TEMPERATURE
-        self.max_tokens = settings.LLM_MAX_TOKENS
+        self.max_tokens = settings.LLM_MAX_MAX_TOKENS # Utiliser une nouvelle setting pour max_tokens Scaleway si différente
         self.timeout = aiohttp.ClientTimeout(total=settings.LLM_TIMEOUT_S)
-        # Supprimer self.model_name de la ligne de log car il n'est plus un attribut
-        logger.info(f"Initialisation du service LLM avec API URL: {self.api_url}")
+        logger.info(f"Initialisation du service LLM Scaleway avec API URL: {self.api_url}")
 
     def _build_prompt(self, history: List[Dict[str, str]], is_interrupted: bool, scenario_context: Optional[Dict] = None, session_id: Optional[str] = None) -> str:
         """
@@ -228,114 +227,170 @@ class LlmService:
         }
         # Pas d'API Key pour API locale vLLM/TGI
 
-        # Adapter le payload au format typique de vLLM/TGI (peut varier, mais souvent plus simple)
-        # Exemple pour TGI ou vLLM avec endpoint /generate
+        # Adapter le payload au format de l'API Scaleway (similaire à OpenAI)
+        # Assurer l'alternance des rôles user/assistant après le message système optionnel
+        messages = []
+        system_message_content = "You are a helpful assistant" # Message système par défaut
+
+        # Extraire le message système de l'historique s'il existe
+        system_message_in_history = next((msg for msg in history if msg["role"] == "system"), None)
+        if system_message_in_history:
+             system_message_content = system_message_in_history["content"]
+
+        # Ajouter le message système
+        messages.append({"role": "system", "content": system_message_content})
+
+        # Ajouter les messages utilisateur/assistant de l'historique en assurant l'alternance
+        # On commence après le message système s'il était dans l'historique, sinon depuis le début
+        start_index = history.index(system_message_in_history) + 1 if system_message_in_history else 0
+
+        for i in range(start_index, len(history)):
+            msg = history[i]
+            # Ignorer les messages système supplémentaires dans l'historique
+            if msg["role"] in ["user", "assistant"]:
+                 messages.append({"role": msg["role"], "content": msg["content"]})
+            # Note: Cette logique simple suppose que l'historique fourni a déjà une structure
+            # user/assistant. Si l'historique peut avoir d'autres rôles ou des séquences non alternées,
+            # une logique plus complexe pourrait être nécessaire pour le nettoyer.
+
+        # Ajouter le prompt spécifique à la fin comme dernier message utilisateur
+        # S'assurer que le dernier message avant le prompt est de l'assistant pour maintenir l'alternance
+        if messages and messages[-1]["role"] == "user":
+             # Si le dernier message est déjà user, cela signifie qu'il y a un problème dans l'historique fourni
+             # ou dans la logique de construction. Pour l'API Scaleway, on ne peut pas avoir deux messages user consécutifs.
+             # Dans ce cas, on pourrait soit ignorer le dernier message user de l'historique,
+             # soit ajouter un message assistant vide, ou lever une erreur.
+             # Pour l'instant, ajoutons un message assistant vide pour tenter de maintenir l'alternance.
+             messages.append({"role": "assistant", "content": ""})
+
+
+        messages.append({"role": "user", "content": prompt})
+
+
         payload = {
-            "inputs": prompt, # Ou "prompt": prompt selon l'API
-            "parameters": {
-                "max_new_tokens": self.max_tokens,
-                "temperature": self.temperature,
-                # "do_sample": True, # Souvent nécessaire si temperature != 1.0
-                # "top_p": 0.9, # Exemple
-                "stop": ["[EMOTION:", "\nuser:", "\nassistant:"] # Séquences d'arrêt importantes
-            }
+            "model": self.model_name,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "top_p": 1, # Valeur par défaut dans l'exemple utilisateur
+            "presence_penalty": 0, # Valeur par défaut dans l'exemple utilisateur
+            "stream": True, # Activer le streaming
         }
-        # Note: Le format exact peut dépendre de la configuration du serveur vLLM/TGI.
-        # Consulter la documentation de l'API du serveur d'inférence si nécessaire.
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.api_key}'
+        }
 
         logger.debug(f"Envoi de la requête LLM à {self.api_url} avec le payload: {json.dumps(payload, indent=2)}")
 
+        full_response_content = ""
+        emotion_label = "neutre" # Défaut
+        scenario_updates = None
+
+        session = None
+        response = None
         try:
-            # Créer une session HTTP asynchrone
             session = aiohttp.ClientSession(timeout=self.timeout)
-            try:
-                # Faire la requête POST
-                response = await session.post(self.api_url, headers=headers, json=payload)
-                try:
-                    response_status = response.status
-                    response_text = await response.text() # Lire le texte pour le log en cas d'erreur
+            response = await session.post(self.api_url, headers=headers, json=payload)
+            response_status = response.status
 
-                    if response_status == 200:
-                        response_data = json.loads(response_text)
-                        logger.debug(f"Réponse LLM reçue: {json.dumps(response_data, indent=2)}")
+            if response_status == 200:
+                # Gérer la réponse en streaming (Server-Sent Events)
+                async for line in response.content:
+                    decoded_line = line.decode('utf-8').strip()
+                    
+                    if not decoded_line: # Ignorer les lignes vides
+                        continue
 
-                        # Extraire la réponse selon le format de l'API (vLLM/TGI)
-                        # Exemple: {"generated_text": "Réponse [EMOTION: encouragement]"}
-                        # Le format exact peut varier.
-                        full_response = response_data.get("generated_text", "")
-                        if not full_response and isinstance(response_data, list): # Autre format possible vLLM
-                             full_response = response_data[0].get("generated_text", "")
-
-                        if not full_response:
-                             logger.error(f"Réponse LLM invalide (champ 'generated_text' manquant ou vide): {response_text}")
-                             raise ValueError("Format de réponse LLM invalide")
-
-                        # Extraire l'émotion et le texte de la réponse
-                        text_response = full_response
-                        emotion_label = "neutre" # Défaut
-
-                        lines = full_response.strip().split('\n')
-                        last_line = lines[-1].strip()
+                    if decoded_line == "data: [DONE]":
+                        break
                         
-                        # Chercher l'émotion sur la dernière ligne
-                        if last_line.startswith("[EMOTION:") and last_line.endswith("]"):
-                            try:
-                                extracted_emotion = last_line.split(":")[1].strip()[:-1].lower()
-                                if extracted_emotion in TARGET_EMOTIONS:
-                                    emotion_label = extracted_emotion
-                                    # Retirer la ligne d'émotion du texte principal
-                                    text_response = "\n".join(lines[:-1]).strip()
-                                else:
-                                    logger.warning(f"Émotion extraite '{extracted_emotion}' non valide. Utilisation de 'neutre'.")
-                            except Exception:
-                                logger.warning(f"Impossible d'extraire l'émotion de '{last_line}'. Utilisation de 'neutre'.")
-                        else:
-                             logger.warning(f"Balise [EMOTION: ...] non trouvée à la fin de la réponse LLM: '{last_line}'. Utilisation de 'neutre'.")
+                    # Vérifier si la ligne contient l'émotion
+                    if decoded_line.startswith("data: [EMOTION:") and decoded_line.endswith("]"):
+                         try:
+                             # Extraire l'émotion directement de la ligne
+                             emotion_part = decoded_line[len("data: "):].strip()
+                             if emotion_part.startswith("[EMOTION:") and emotion_part.endswith("]"):
+                                 extracted_emotion = emotion_part.split(":")[1].strip()[:-1].lower()
+                                 if extracted_emotion in TARGET_EMOTIONS:
+                                     emotion_label = extracted_emotion
+                                     logger.debug(f"Émotion extraite du flux: {emotion_label}")
+                                 else:
+                                     logger.warning(f"Émotion extraite du flux '{extracted_emotion}' non valide. Utilisation de 'neutre'.")
+                             else:
+                                 logger.warning(f"Format d'émotion inattendu dans le flux: {decoded_line}")
+                         except Exception as e:
+                             logger.warning(f"Impossible d'extraire l'émotion de la ligne du flux '{decoded_line}': {e}")
+                         continue # Passer à la ligne suivante après avoir traité l'émotion
 
+                    # Si ce n'est pas l'émotion, essayer de parser comme JSON pour le contenu
+                    if decoded_line.startswith("data: "):
+                        try:
+                            json_content = decoded_line[len("data: "):]
+                            # Gérer le cas où le JSON est vide (ex: 'data: \n')
+                            if not json_content:
+                                continue
+                            data = json.loads(json_content)
+                            if data.get("choices") and data["choices"][0]["delta"].get("content"):
+                                content = data["choices"][0]["delta"]["content"]
+                                full_response_content += content
+                        except json.JSONDecodeError:
+                            # Ignorer les lignes data: qui ne sont pas du JSON valide (autre que l'émotion déjà traitée)
+                            logger.warning(f"Impossible de décoder la ligne JSON du flux (ignorée): {decoded_line}")
+                            continue
+                        except Exception as e:
+                             logger.error(f"Erreur lors du traitement d'un chunk de réponse: {e}", exc_info=True)
+                             continue
 
-                        if not text_response: # Si le LLM n'a retourné que l'émotion
-                            text_response = "..." # Fournir un texte minimal
-                        
-                        # Extraire les mises à jour de scénario si présentes
-                        scenario_updates = None
-                        if scenario_context:
-                            # Utiliser full_response car la balise peut être n'importe où
-                            scenario_updates = self._extract_scenario_updates(full_response, scenario_context)
-                        
-                        result = {
-                            "text_response": text_response,
-                            "emotion_label": emotion_label
-                        }
-                        
-                        if scenario_updates:
-                            result["scenario_updates"] = scenario_updates
-                            
-                        return result
-                    else:
-                        logger.error(f"Erreur API LLM ({response_status}): {response_text}")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response_status,
-                            message=f"Erreur API LLM: {response_text}",
-                            headers=response.headers
-                        )
-                finally:
-                    # Fermer la réponse
-                    response.close()
-            finally:
-                # Fermer la session
-                await session.close()
+                # Une fois le flux terminé, traiter la réponse complète
+                logger.debug(f"Flux LLM terminé. Contenu complet: {full_response_content}")
+
+                text_response = full_response_content.strip()
+
+                # L'émotion a déjà été extraite pendant le streaming
+                # Nettoyer le texte au cas où l'émotion serait quand même présente (par sécurité)
+                lines = text_response.split('\n')
+                if lines and lines[-1].strip().startswith("[EMOTION:") and lines[-1].strip().endswith("]"):
+                    text_response = "\n".join(lines[:-1]).strip()
+
+                if not text_response:
+                    text_response = "..." # Fournir un texte minimal si vide
+
+                if scenario_context:
+                    scenario_updates = self._extract_scenario_updates(full_response_content, scenario_context) # Utiliser full_response_content pour l'extraction du scénario
+
+                result = {
+                    "text_response": text_response,
+                    "emotion_label": emotion_label # Utiliser l'émotion extraite pendant le stream
+                }
+                if scenario_updates:
+                    result["scenario_updates"] = scenario_updates
+                return result
+
+            else:
+                response_text = await response.text()
+                logger.error(f"Erreur API LLM ({response_status}): {response_text}")
+                response.raise_for_status() # Lève ClientResponseError
 
         except asyncio.TimeoutError:
             logger.error(f"Timeout lors de l'appel à l'API LLM ({settings.LLM_TIMEOUT_S}s)")
             raise TimeoutError("Timeout API LLM")
         except aiohttp.ClientError as e:
             logger.error(f"Erreur client HTTP lors de l'appel LLM: {e}", exc_info=True)
-            raise ConnectionError(f"Erreur de connexion API LLM: {e}")
+            # Remonter l'erreur spécifique si possible, sinon une ConnectionError générique
+            if isinstance(e, aiohttp.ClientResponseError):
+                 raise # Remonter l'erreur telle quelle
+            else:
+                 raise ConnectionError(f"Erreur de connexion API LLM: {e}")
         except Exception as e:
             logger.error(f"Erreur inattendue lors de la génération LLM: {e}", exc_info=True)
             raise RuntimeError(f"Erreur LLM: {e}")
+        finally:
+            if response:
+                response.close() # Assurer la fermeture de la réponse
+            if session:
+                await session.close() # Assurer la fermeture de la session
             
     def _extract_scenario_updates(self, full_response: str, scenario_context: Dict) -> Optional[Dict]:
         """
@@ -417,52 +472,69 @@ class LlmService:
         
         prompt += "Ne génère que le texte de l'exercice lui-même, sans introduction ni conclusion supplémentaire, et sans ajouter d'étiquette d'émotion ou de mise à jour de scénario."
 
-        headers = {'Content-Type': 'application/json'}
+        # Adapter le payload au format de l'API Scaleway (similaire à OpenAI) pour une requête non-streaming
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+
         payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": self.max_tokens * 2, # Permettre des textes potentiellement plus longs pour les exercices
-                "temperature": self.temperature,
-                "stop": ["\nuser:", "\nassistant:"] # Séquences d'arrêt
-            }
+            "model": self.model_name,
+            "messages": messages,
+            "max_tokens": self.max_tokens * 2, # Permettre des textes potentiellement plus longs pour les exercices
+            "temperature": self.temperature,
+            "top_p": 1,
+            "presence_penalty": 0,
+            "stream": False, # Désactiver le streaming pour cette méthode
         }
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.api_key}'
+        }
+
         logger.debug(f"Envoi de la requête LLM (exercice) à {self.api_url} avec le payload: {json.dumps(payload, indent=2)}")
 
+        session = None
+        response = None
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(self.api_url, headers=headers, json=payload) as response:
-                    response_status = response.status
-                    response_text = await response.text()
+            session = aiohttp.ClientSession(timeout=self.timeout)
+            response = await session.post(self.api_url, headers=headers, json=payload)
+            response_status = response.status
 
-                    if response_status == 200:
-                        response_data = json.loads(response_text)
-                        logger.debug(f"Réponse LLM (exercice) reçue: {json.dumps(response_data, indent=2)}")
-                        
-                        generated_text = response_data.get("generated_text", "")
-                        if not generated_text and isinstance(response_data, list):
-                             generated_text = response_data[0].get("generated_text", "")
+            if response_status == 200:
+                response_data = await response.json()
+                logger.debug(f"Réponse LLM (exercice) reçue: {json.dumps(response_data, indent=2)}")
 
-                        if not generated_text:
-                             logger.error(f"Réponse LLM (exercice) invalide: {response_text}")
-                             raise ValueError("Format de réponse LLM invalide pour l'exercice")
-                             
-                        # Nettoyer le texte généré (peut contenir des artefacts du prompt)
-                        # Simple nettoyage pour l'instant
-                        cleaned_text = generated_text.strip()
-                        
-                        return cleaned_text
-                    else:
-                        logger.error(f"Erreur API LLM ({response_status}) pour exercice: {response_text}")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info, response.history, status=response_status,
-                            message=f"Erreur API LLM exercice: {response_text}", headers=response.headers
-                        )
+                generated_text = ""
+                if response_data.get("choices") and response_data["choices"][0].get("message") and response_data["choices"][0]["message"].get("content"):
+                     generated_text = response_data["choices"][0]["message"]["content"]
+
+                if not generated_text:
+                     logger.error(f"Réponse LLM (exercice) invalide: {await response.text()}")
+                     raise ValueError("Format de réponse LLM invalide pour l'exercice")
+
+                cleaned_text = generated_text.strip()
+                return cleaned_text
+            else:
+                response_text = await response.text()
+                logger.error(f"Erreur API LLM ({response_status}) pour exercice: {response_text}")
+                response.raise_for_status() # Lève ClientResponseError
+
         except asyncio.TimeoutError:
             logger.error(f"Timeout lors de l'appel à l'API LLM (exercice)")
             raise TimeoutError("Timeout API LLM exercice")
         except aiohttp.ClientError as e:
             logger.error(f"Erreur client HTTP lors de l'appel LLM (exercice): {e}", exc_info=True)
-            raise ConnectionError(f"Erreur de connexion API LLM exercice: {e}")
+            if isinstance(e, aiohttp.ClientResponseError):
+                 raise
+            else:
+                 raise ConnectionError(f"Erreur de connexion API LLM exercice: {e}")
         except Exception as e:
             logger.error(f"Erreur inattendue lors de la génération LLM (exercice): {e}", exc_info=True)
             raise RuntimeError(f"Erreur LLM exercice: {e}")
+        finally:
+            if response:
+                response.close()
+            if session:
+                await session.close()

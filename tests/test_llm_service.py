@@ -4,34 +4,31 @@ import json
 from unittest.mock import MagicMock, AsyncMock
 
 import aiohttp
+from aioresponses import aioresponses # Importer aioresponses
 
 # Importer la classe à tester
 from services.llm_service import LlmService, TARGET_EMOTIONS
 # Importer les settings pour les valeurs par défaut
 from core.config import settings
 
-# Fixture pour initialiser le service LLM
-@pytest.fixture
-def llm_service(mocker):
-    # Mocker aiohttp.ClientSession et son instance
-    mock_session_instance = AsyncMock()
-    mocker.patch('aiohttp.ClientSession', return_value=mock_session_instance)
-
-    # Instancier le service LLM
-    service = LlmService()
-    
-    # Retourner le service et l'instance mockée de la session
-    return service, mock_session_instance
-
-# Mock pour simuler la réponse de aiohttp
+# Mock pour simuler la réponse de aiohttp, y compris le contenu streamé
 class MockAiohttpResponse:
-    def __init__(self, status, json_data=None, text_data=None):
+    def __init__(self, status, json_data=None, text_data=None, content_chunks=None):
         self.status = status
         self._json_data = json_data
         self._text_data = text_data if text_data is not None else (json.dumps(json_data) if json_data else "")
         self.request_info = MagicMock()
         self.history = ()
         self.headers = {}
+        # Créer un itérateur asynchrone mocké pour le contenu streamé
+        self.content = AsyncMock()
+        _content_chunks = content_chunks if content_chunks is not None else []
+
+        # Définir explicitement __aiter__ pour retourner un itérateur asynchrone
+        async def _aiter():
+            for chunk in _content_chunks:
+                yield chunk
+        self.content.__aiter__ = _aiter
 
     async def json(self):
         if self._json_data is None:
@@ -42,11 +39,13 @@ class MockAiohttpResponse:
         return self._text_data
 
     async def __aenter__(self):
+        # Nécessaire pour `async with response:`
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        # Nécessaire pour `async with response:`
         pass
-        
+
     def raise_for_status(self):
         if self.status >= 400:
             raise aiohttp.ClientResponseError(
@@ -56,109 +55,184 @@ class MockAiohttpResponse:
                 message=f"Error: {self._text_data}",
                 headers=self.headers
             )
-            
+
     def close(self):
         pass
 
-# Test de la génération LLM réussie (cas normal)
+# Fixture pour instancier le service LLM (plus besoin de mocker aiohttp ici)
+@pytest.fixture
+def llm_service_instance():
+    # Note: Assurez-vous que les settings sont chargés correctement,
+    # surtout SCW_LLM_API_KEY pour l'initialisation du service.
+    # Si les tests échouent à cause de settings manquants,
+    # il faudra peut-être mocker `settings` ou s'assurer que .env est lu.
+    try:
+        service = LlmService()
+    except Exception as e:
+        # Fournir un message d'erreur plus clair si l'initialisation échoue
+        pytest.fail(f"Failed to initialize LlmService: {e}. Ensure SCW_LLM_API_KEY is set in .env or mocked.")
+    return service
+
+# Test de la génération LLM réussie (cas normal) avec aioresponses
 @pytest.mark.asyncio
-async def test_generate_success(llm_service, mocker):
-    # Le fixture llm_service retourne le service et l'instance mockée de la session
-    service, mock_session = llm_service
+async def test_generate_success(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
 
-    mock_response = MockAiohttpResponse(status=200, json_data={
-        "generated_text": "Ceci est la réponse du coach.\n[EMOTION: encouragement]"
-    })
-    # Configurer le mock de session pour retourner la réponse mockée
-    mock_session.post.return_value = mock_response
+    # Définir les chunks de la réponse streamée
+    stream_chunks = [
+        bytes('data: {"choices": [{"delta": {"content": "Ceci est "}}]}\n', 'utf-8'),
+        bytes('data: {"choices": [{"delta": {"content": "la réponse "}}]}\n', 'utf-8'),
+        bytes('data: {"choices": [{"delta": {"content": "du coach."}}]}\n', 'utf-8'),
+        bytes('data: \n', 'utf-8'), # Ligne vide
+        bytes('data: [EMOTION: encouragement]\n', 'utf-8'),
+        bytes('data: [DONE]\n', 'utf-8')
+    ]
 
-    history = [{"role": "user", "content": "Bonjour coach"}]
-    result = await service.generate(history, is_interrupted=False)
+    with aioresponses() as m:
+        # Mocker la requête POST vers l'URL de l'API avec body pour le stream
+        m.post(url, body=b"".join(stream_chunks), status=200, content_type='text/event-stream') # Utiliser body
 
-    # Vérifications
-    assert result == {"text_response": "Ceci est la réponse du coach.", "emotion_label": "encouragement"}
-    mock_session.post.assert_called_once() # Vérifier l'appel sur le mock de session
-    # Vérifier le payload envoyé
-    call_args, call_kwargs = mock_session.post.call_args
-    sent_payload = call_kwargs.get("json", {})
-    assert "inputs" in sent_payload
-    assert "Bonjour coach" in sent_payload["inputs"]
-    assert "Coach:" in sent_payload["inputs"]
-    assert "interrompre" not in sent_payload["inputs"] # Pas d'interruption
-    assert f"liste : {', '.join(TARGET_EMOTIONS)}" in sent_payload["inputs"]
+        history = [{"role": "user", "content": "Bonjour coach"}]
+        result = await service.generate(history, is_interrupted=False)
 
-# Test de la génération LLM réussie (cas interruption)
+        # Vérifications
+        assert result == {"text_response": "Ceci est la réponse du coach.", "emotion_label": "encouragement"}
+
+# Test de la génération LLM réussie (cas interruption) avec aioresponses
 @pytest.mark.asyncio
-async def test_generate_success_interrupted(llm_service, mocker):
-    service, mock_session = llm_service
+async def test_generate_success_interrupted(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
 
-    mock_response = MockAiohttpResponse(status=200, json_data={
-        "generated_text": "Oui ? Que puis-je faire ?\n[EMOTION: curiosite]"
-    })
-    # Configurer le mock de session pour retourner la réponse mockée
-    mock_session.post.return_value = mock_response
-    
-    history = [{"role": "user", "content": "Bonjour"}, {"role": "assistant", "content": "Comment allez-vous ?"}, {"role": "user", "content": "En fait je voulais..."}]
-    result = await service.generate(history, is_interrupted=True)
+    stream_chunks = [
+        bytes('data: {"choices": [{"delta": {"content": "Oui ? "}}]}\n', 'utf-8'),
+        bytes('data: {"choices": [{"delta": {"content": "Que puis-je faire ?"}}]}\n', 'utf-8'),
+        bytes('data: \n', 'utf-8'),
+        bytes('data: [EMOTION: curiosite]\n', 'utf-8'),
+        bytes('data: [DONE]\n', 'utf-8')
+    ]
 
-    assert result == {"text_response": "Oui ? Que puis-je faire ?", "emotion_label": "curiosite"}
-    mock_session.post.assert_called_once()
-    call_args, call_kwargs = mock_session.post.call_args
-    sent_payload = call_kwargs.get("json", {})
-    assert "interrompre" in sent_payload["inputs"] # Contexte d'interruption
+    with aioresponses() as m:
+        m.post(url, body=b"".join(stream_chunks), status=200, content_type='text/event-stream') # Utiliser body
 
-# Test de l'extraction d'émotion invalide ou manquante
+        history = [{"role": "user", "content": "Bonjour"}, {"role": "assistant", "content": "Comment allez-vous ?"}, {"role": "user", "content": "En fait je voulais..."}]
+        result = await service.generate(history, is_interrupted=True)
+
+        assert result == {"text_response": "Oui ? Que puis-je faire ?", "emotion_label": "curiosite"}
+
+# Test de l'extraction d'émotion invalide ou manquante avec aioresponses
 @pytest.mark.asyncio
-async def test_generate_emotion_extraction(llm_service, mocker):
-    service, mock_session = llm_service
+async def test_generate_emotion_extraction(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
 
     # Cas 1: Émotion non valide
-    mock_response_1 = MockAiohttpResponse(status=200, json_data={
-        "generated_text": "Réponse sans émotion valide.\n[EMOTION: heureux]"
-    })
-    mock_session.post.return_value = mock_response_1
-    result_1 = await service.generate([], is_interrupted=False)
-    # Accepter que la ligne d'émotion reste dans le texte quand l'émotion est invalide
-    assert result_1["emotion_label"] == "neutre"
-    assert "Réponse sans émotion valide." in result_1["text_response"]
+    stream_chunks_1 = [
+        bytes('data: {"choices": [{"delta": {"content": "Réponse sans émotion valide."}}]}\n', 'utf-8'),
+        bytes('data: \n', 'utf-8'),
+        bytes('data: [EMOTION: heureux]\n', 'utf-8'),
+        bytes('data: [DONE]\n', 'utf-8')
+    ]
+    with aioresponses() as m:
+        m.post(url, body=b"".join(stream_chunks_1), status=200, content_type='text/event-stream') # Utiliser body
+        result_1 = await service.generate([], is_interrupted=False)
+        assert result_1["emotion_label"] == "neutre"
+        assert result_1["text_response"] == "Réponse sans émotion valide."
+        assert "[EMOTION: heureux]" not in result_1["text_response"] # Vérifier que la ligne invalide est absente
 
     # Cas 2: Pas de ligne d'émotion
-    mock_response_2 = MockAiohttpResponse(status=200, json_data={
-        "generated_text": "Réponse sans aucune ligne d'émotion."
-    })
-    mock_session.post.return_value = mock_response_2
-    result_2 = await service.generate([], is_interrupted=False)
-    assert result_2 == {"text_response": "Réponse sans aucune ligne d'émotion.", "emotion_label": "neutre"}
+    stream_chunks_2 = [
+        bytes('data: {"choices": [{"delta": {"content": "Réponse sans aucune ligne d\'émotion."}}]}\n', 'utf-8'),
+        bytes('data: [DONE]\n', 'utf-8')
+    ]
+    with aioresponses() as m:
+        m.post(url, body=b"".join(stream_chunks_2), status=200, content_type='text/event-stream') # Utiliser body
+        result_2 = await service.generate([], is_interrupted=False)
+        assert result_2 == {"text_response": "Réponse sans aucune ligne d'émotion.", "emotion_label": "neutre"}
 
     # Cas 3: Ligne d'émotion mal formée
-    mock_response_3 = MockAiohttpResponse(status=200, json_data={
-        "generated_text": "Réponse avec émotion mal formée.\n[EMOTION encouragement]"
-    })
-    mock_session.post.return_value = mock_response_3
-    result_3 = await service.generate([], is_interrupted=False)
-    # Accepter que la ligne d'émotion reste dans le texte quand elle est mal formée
-    assert result_3["emotion_label"] == "neutre"
-    assert "Réponse avec émotion mal formée." in result_3["text_response"]
+    stream_chunks_3 = [
+        bytes('data: {"choices": [{"delta": {"content": "Réponse avec émotion mal formée."}}]}\n', 'utf-8'),
+        bytes('data: \n', 'utf-8'),
+        bytes('data: [EMOTION encouragement]\n', 'utf-8'),
+        bytes('data: [DONE]\n', 'utf-8')
+    ]
+    with aioresponses() as m:
+        m.post(url, body=b"".join(stream_chunks_3), status=200, content_type='text/event-stream') # Utiliser body
+        result_3 = await service.generate([], is_interrupted=False)
+        assert result_3["emotion_label"] == "neutre"
+        assert result_3["text_response"] == "Réponse avec émotion mal formée."
+        assert "[EMOTION encouragement]" not in result_3["text_response"] # Vérifier que la ligne mal formée est absente
 
-# Test de la gestion d'erreur API (ex: 500)
+# Test de la gestion d'erreur API (ex: 500) avec aioresponses
 @pytest.mark.asyncio
-async def test_generate_api_error(llm_service, mocker):
-    service, mock_session = llm_service
+async def test_generate_api_error(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
 
-    mock_response = MockAiohttpResponse(status=500, text_data="Internal Server Error")
-    mock_session.post.return_value = mock_response
+    with aioresponses() as m:
+        m.post(url, status=500, body="Internal Server Error")
+        with pytest.raises(aiohttp.ClientResponseError):
+             await service.generate([], is_interrupted=False)
 
-    # Vérifier que l'exception est levée (ClientResponseError)
-    with pytest.raises(aiohttp.ClientResponseError):
-         await service.generate([], is_interrupted=False)
-
-# Test de la gestion du timeout
+# Test de la gestion du timeout avec aioresponses (simulé par exception)
 @pytest.mark.asyncio
-async def test_generate_timeout(llm_service, mocker):
-    service, mock_session = llm_service
+async def test_generate_timeout(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
 
-    # Simuler un timeout en faisant lever une exception par le mock
-    mock_session.post.side_effect = asyncio.TimeoutError()
+    with aioresponses() as m:
+        # Simuler un timeout en levant l'exception appropriée
+        m.post(url, exception=asyncio.TimeoutError())
+        with pytest.raises(TimeoutError, match="Timeout API LLM"):
+            await service.generate([], is_interrupted=False)
 
-    with pytest.raises(TimeoutError, match="Timeout API LLM"):
-        await service.generate([], is_interrupted=False)
+# Test de la génération de texte d'exercice réussie (non-streaming) avec aioresponses
+@pytest.mark.asyncio
+async def test_generate_exercise_text_success(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
+
+    response_payload = {
+        "choices": [{"message": {"content": "Voici un texte pour l'exercice."}}]
+    }
+
+    with aioresponses() as m:
+        m.post(url, payload=response_payload, status=200)
+
+        exercise_type = "diction"
+        topic = "voyage"
+        difficulty = "facile"
+        length = "court"
+
+        result = await service.generate_exercise_text(exercise_type, topic, difficulty, length)
+
+        # Vérifications
+        assert result == "Voici un texte pour l'exercice."
+        # Vérifier que la requête a été faite avec stream=False
+        request = list(m.requests.values())[0][0] # Accéder à la requête interceptée
+        sent_payload = request.kwargs['json'] # Accéder directement au dict
+        assert sent_payload.get("stream") is False
+
+# Test de la gestion d'erreur API pour la génération d'exercice avec aioresponses
+@pytest.mark.asyncio
+async def test_generate_exercise_text_api_error(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
+
+    with aioresponses() as m:
+        m.post(url, status=400, body="Bad Request")
+        with pytest.raises(aiohttp.ClientResponseError):
+            await service.generate_exercise_text("diction")
+
+# Test de la gestion du timeout pour la génération d'exercice avec aioresponses
+@pytest.mark.asyncio
+async def test_generate_exercise_text_timeout(llm_service_instance):
+    service = llm_service_instance
+    url = service.api_url
+
+    with aioresponses() as m:
+        m.post(url, exception=asyncio.TimeoutError())
+        with pytest.raises(TimeoutError, match="Timeout API LLM exercice"):
+            await service.generate_exercise_text("diction")
