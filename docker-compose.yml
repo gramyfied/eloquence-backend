@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  # Service principal FastAPI
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data # Partage des données (audio, feedback parsé)
+      - ./logs:/app/logs
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://eloquence:eloquence@db:5432/eloquence
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379 # Port interne de Redis
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # URLs internes utilisant les noms de service Docker Compose
+      # (Supposant que ces services sont définis ailleurs ou seront ajoutés)
+      - ASR_API_URL=http://asr-service:8001/asr
+      - LLM_LOCAL_API_URL=http://llm-service:8000 # URL pour vLLM/TGI
+      - TTS_API_URL=http://tts-service:5002/api/tts
+      - KALDI_CONTAINER_NAME=kaldi_eloquence # Nom fixe pour docker exec
+      - DEBUG=true
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+    deploy:
+      resources:
+        limits:
+          memory: 8g # Limite de mémoire à 8GB
+
+  # Base de données PostgreSQL
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=eloquence
+      - POSTGRES_PASSWORD=eloquence
+      - POSTGRES_DB=eloquence
+    ports:
+      - "5433:5432"
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+  # Redis pour cache et files d'attente
+  redis:
+    image: redis:7
+    ports:
+      - "6380:6379" # Exposer sur 6380 sur l'hôte, mais utiliser 6379 en interne
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+  # Celery Worker pour tâches asynchrones
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A core.celery_app worker --loglevel=info
+    volumes:
+      - ./data:/app/data # Accès aux données (audio, feedback parsé)
+      - ./logs:/app/logs
+      # Monter les mêmes volumes que Kaldi pour que le worker puisse écrire/lire
+      - ./data/audio:/audio # Chemin où le worker écrit les WAV temporaires
+      - ./data/feedback/kaldi_raw:/kaldi_output # Chemin où le worker lit les résultats bruts
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://eloquence:eloquence@db:5432/eloquence
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379 # Port interne de Redis
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - KALDI_CONTAINER_NAME=kaldi_eloquence # Nom fixe pour docker exec
+    depends_on:
+      - redis
+      - db
+      - kaldi # Dépend du service Kaldi pour les volumes partagés
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+  # Service Kaldi
+  kaldi:
+    image: kaldiasr/kaldi:latest
+    container_name: ${KALDI_CONTAINER_NAME:-kaldi_eloquence} # Nom fixe important pour docker exec
+    volumes:
+      # Monter les répertoires de l'hôte où le worker écrit/lit
+      - ./data/audio:/audio # Les fichiers audio WAV lus par Kaldi
+      - ./data/feedback/kaldi_raw:/kaldi_output # Où Kaldi écrit ses résultats bruts
+      # Optionnel: Monter les modèles Kaldi depuis l'hôte si non inclus dans l'image
+      # - ./kaldi_models/egs/librispeech:/kaldi/egs/librispeech
+    # Garder le conteneur en vie (sinon il s'arrête car pas de commande principale)
+    command: tail -f /dev/null
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+# Définir les services IA (exemples, à adapter)
+#  asr-service:
+#    image: your-faster-whisper-image
+#    ports:
+#      - "8001:8001"
+#    networks:
+#      - eloquence-network
+#    # ... config GPU, volumes modèles ...
+
+#  llm-service:
+#    image: your-vllm-mistral-image
+#    ports:
+#      - "8002:8000" # Port interne vLLM souvent 8000
+#    networks:
+#      - eloquence-network
+#    # ... config GPU, volumes modèles ...
+
+#  tts-service:
+#    image: your-coqui-tts-image
+#    ports:
+#      - "5002:5002"
+#    networks:
+#      - eloquence-network
+#    # ... config GPU, volumes modèles ...
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  eloquence-network:
+    driver: bridge
