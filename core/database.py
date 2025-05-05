@@ -31,17 +31,11 @@ try:
             async_db_url = async_db_url.replace("sqlite", "sqlite+aiosqlite", 1)
             logger.info("Adaptation de l'URL DB pour aiosqlite.")
 
-    # Créer le moteur avec les options appropriées
-    connect_args = {}
-    if async_db_url.startswith("sqlite"):
-        # Options spécifiques à SQLite pour permettre l'accès concurrent
-        connect_args = {"check_same_thread": False}
-    
+    # Créer le moteur asynchrone
     engine = create_async_engine(
         async_db_url,
         echo=False,
         future=True,
-        connect_args=connect_args
     )
     logger.info(f"Moteur de base de données asynchrone créé pour: {async_db_url}")
 

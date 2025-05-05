@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 import yaml
 from pydantic_settings import BaseSettings
-from typing import Optional, List
+from typing import Optional, List, ClassVar
 
 # Charger les variables d'environnement depuis .env s'il existe
 load_dotenv()
@@ -19,11 +19,18 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: List[str] = ["*"]  # En production, spécifier les origines autorisées
     
-    # Base de données
-    DATABASE_URL: str = "sqlite+aiosqlite:///./eloquence.db"
+    # Base de données Supabase (chargée manuellement en raison de problèmes avec pydantic-settings)
+    SUPABASE_PROJECT_REF: ClassVar[Optional[str]] = os.getenv("SUPABASE_PROJECT_REF")
+    SUPABASE_DB_PASSWORD: ClassVar[Optional[str]] = os.getenv("SUPABASE_DB_PASSWORD")
+    SUPABASE_REGION: ClassVar[str] = os.getenv("SUPABASE_REGION", "eu-west-3") # Région par défaut
+
+    if not SUPABASE_PROJECT_REF or not SUPABASE_DB_PASSWORD:
+        raise ValueError("SUPABASE_PROJECT_REF and SUPABASE_DB_PASSWORD must be set in .env or environment variables")
+
+    DATABASE_URL: str = f"postgresql+asyncpg://postgres.{SUPABASE_PROJECT_REF}:{SUPABASE_DB_PASSWORD}@aws-0-{SUPABASE_REGION}.pooler.supabase.com:6543/postgres"
     
     # Redis
-    REDIS_HOST: str = "localhost"
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -61,8 +68,8 @@ class Settings(BaseSettings):
     MODEL_STORAGE_PATH: str = "./data/models"
 
     # ASR (Faster Whisper)
-    ASR_MODEL_NAME: str = "large-v3" # Ou "medium", "small", "base", "tiny"
-    ASR_DEVICE: str = "cuda" # "cuda" ou "cpu"
+    ASR_MODEL_NAME: str = "large-v2" # Ou "medium", "small", "base", "tiny"
+    ASR_DEVICE: str = "cpu" # "cuda" ou "cpu"
     ASR_COMPUTE_TYPE: str = "int8" # "int8", "float16", "float32"
     ASR_BEAM_SIZE: int = 5
     ASR_LANGUAGE: str = "fr"

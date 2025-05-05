@@ -52,6 +52,7 @@ async def websocket_endpoint(
     Le client envoie des chunks audio et reçoit des chunks audio en retour.
     Le client peut également envoyer des messages de contrôle JSON.
     """
+    logger.info(f"Nouvelle connexion WebSocket entrante pour session {session_id}")
     try:
         # Vérifier que la session existe
         # Note: Dans une implémentation réelle, il faudrait vérifier que l'utilisateur
@@ -59,10 +60,13 @@ async def websocket_endpoint(
         
         # Accepter la connexion WebSocket
         await orchestrator.connect_client(websocket, session_id)
+        logger.info(f"Connexion WebSocket acceptée pour session {session_id}")
         
         # Boucle de traitement des messages
         while True:
+            logger.info(f"En attente de message WebSocket pour session {session_id}...")
             await orchestrator.process_websocket_message(websocket, session_id)
+            logger.info(f"Message WebSocket traité pour session {session_id}.")
     
     except WebSocketDisconnect:
         logger.info(f"Client déconnecté de la session {session_id}")
@@ -88,16 +92,20 @@ async def debug_websocket_endpoint(
     Permet de tester le flux sans authentification.
     À utiliser uniquement en développement.
     """
+    logger.info(f"Nouvelle connexion WebSocket de débogage entrante pour session {session_id}")
     if not session_id:
         session_id = "debug-session"
     
     try:
         # Accepter la connexion WebSocket
         await orchestrator.connect_client(websocket, session_id)
+        logger.info(f"Connexion WebSocket de débogage acceptée pour session {session_id}")
         
         # Boucle de traitement des messages
         while True:
+            logger.info(f"En attente de message WebSocket de débogage pour session {session_id}...")
             await orchestrator.process_websocket_message(websocket, session_id)
+            logger.info(f"Message WebSocket de débogage traité pour session {session_id}.")
     
     except WebSocketDisconnect:
         logger.info(f"Client déconnecté de la session de débogage {session_id}")

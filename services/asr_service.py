@@ -66,10 +66,13 @@ class AsrService:
 
         loop = asyncio.get_running_loop()
         try:
+            logger.info(f"Début de la transcription pour {len(audio_bytes)} bytes audio, langue: {language}")
             # 1. Convertir les bytes PCM 16-bit en numpy array float32
             # Utiliser soundfile pour lire depuis la mémoire
             audio_io = io.BytesIO(audio_bytes)
             audio_data, sample_rate = sf.read(audio_io, dtype='float32')
+
+            logger.info(f"Audio lu par soundfile: shape={audio_data.shape}, dtype={audio_data.dtype}, sample_rate={sample_rate}")
 
             if sample_rate != 16000:
                 # Ceci ne devrait pas arriver si le flux est bien en 16k, mais sécurité
@@ -84,6 +87,7 @@ class AsrService:
                 audio_data,
                 language
             )
+            logger.info(f"Transcription synchrone terminée. Résultat: '{transcription}'")
             return transcription
 
         except Exception as e:

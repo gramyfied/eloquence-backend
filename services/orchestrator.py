@@ -171,13 +171,17 @@ class Orchestrator:
         Traite un chunk audio reçu du client.
         Utilise le VAD pour détecter la parole et déclenche le traitement approprié.
         """
+        logger.info(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
         session = self.active_sessions.get(session_id)
         if not session:
             logger.error(f"Session {session_id} non trouvée")
             return
         
+        logger.info(f"État de la session {session_id} au début de _process_audio_chunk: {session['state']}")
+
         # Si l'IA est en train de parler et qu'on reçoit de l'audio, c'est une interruption
         if session["state"] == SESSION_STATE_IA_SPEAKING and not session["is_interrupted"]:
+            logger.info(f"Interruption potentielle détectée par audio entrant pendant que l'IA parle.")
             await self._process_control_event(session_id, CONTROL_USER_INTERRUPT)
         
         # Mettre à jour l'état
@@ -199,11 +203,14 @@ class Orchestrator:
         is_speech = vad_result["is_speech"]
         confidence = vad_result["confidence"]
         
+        logger.debug(f"Résultat VAD: speech_prob={speech_prob:.2f}, is_speech={is_speech}, confidence={confidence:.2f}")
+
         if speech_prob is not None:
             current_time = time.time()
             
             # Parole détectée - utiliser is_speech pour une détection plus robuste
             if is_speech:
+                logger.debug(f"Parole détectée (is_speech=True)")
                 session["speech_detected"] = True
                 session["last_speech_time"] = current_time
                 session["silence_duration"] = 0
@@ -217,18 +224,23 @@ class Orchestrator:
                     await self._process_control_event(session_id, CONTROL_USER_INTERRUPT)
             # Silence détecté
             elif session["speech_detected"] and not is_speech:
+                logger.debug(f"Silence détecté (is_speech=False) après parole détectée.")
                 # Calculer la durée du silence
                 if session["last_speech_time"]:
                     session["silence_duration"] = current_time - session["last_speech_time"]
                 
+                logger.debug(f"Durée du silence: {session['silence_duration']:.2f}s")
+
                 # Gérer les différents seuils de silence
                 min_silence_end_turn = settings.VAD_MIN_SILENCE_DURATION_MS / 1000
                 min_silence_gentle_prompt = settings.VAD_GENTLE_PROMPT_SILENCE_MS / 1000
                 min_silence_wait = settings.VAD_WAIT_SILENCE_MS / 1000 # Nouveau seuil à ajouter dans config
 
+                logger.debug(f"Seuils de silence: end_turn={min_silence_end_turn:.2f}s, gentle_prompt={min_silence_gentle_prompt:.2f}s, wait={min_silence_wait:.2f}s")
+
                 # 1. Silence long -> Fin de tour
                 if session["silence_duration"] >= min_silence_end_turn:
-                    logger.debug(f"Silence long détecté ({session['silence_duration']:.2f}s), fin du tour.")
+                    logger.debug(f"Silence long détecté ({session['silence_duration']:.2f}s), déclenchement fin du tour.")
                     await self._process_user_speech_end(session_id)
                 # 2. Silence moyen -> Relance douce (optionnel)
                 elif session["silence_duration"] >= min_silence_gentle_prompt:
@@ -247,7 +259,11 @@ class Orchestrator:
                     pass # Ne rien faire, continuer d'attendre
                 # 4. Silence très court -> Ignorer
                 else:
+                    logger.debug(f"Silence très court détecté ({session['silence_duration']:.2f}s), ignorer.")
                     pass
+            else:
+                logger.debug("Silence détecté (is_speech=False) avant parole détectée. Ignorer.")
+
     
     async def _process_user_speech_end(self, session_id: str):
         """
