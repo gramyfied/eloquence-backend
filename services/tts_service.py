@@ -293,7 +293,7 @@ class TtsService:
             if session_id in self.active_generations:
                 del self.active_generations[session_id]
                 logger.debug(f"Tâche TTS supprimée pour la session {session_id}")
-            raise
+                # Supprimer le raise sans exception
 
     async def stop_generation(self, session_id: str):
         """
@@ -341,6 +341,7 @@ class TtsService:
                     logger.warning(f"Échec de l'arrêt de la génération TTS pour la session {session_id}: {response.status}")
                     # L'annulation de la tâche asyncio a déjà été tentée ci-dessus
                     return False
+                    
             finally:
                 # Fermer la session
                 await session.close()
@@ -348,3 +349,65 @@ class TtsService:
             logger.error(f"Erreur lors de la tentative d'arrêt de la génération TTS pour la session {session_id}: {e}")
             # L'annulation de la tâche asyncio a déjà été tentée ci-dessus
             return False
+            
+    async def synthesize(self, text: str, voice: Optional[str] = None, speed: Optional[float] = 1.0, language: str = "fr") -> Dict[str, str]:
+        """
+        Synthétise le texte en audio et retourne le chemin du fichier audio.
+        Cette méthode est utilisée par les routes API pour la synthèse vocale.
+        
+        Args:
+            text: Le texte à synthétiser
+            voice: L'ID de la voix à utiliser (optionnel)
+            speed: La vitesse de la synthèse (optionnel)
+            language: La langue du texte (par défaut: "fr")
+            
+        Returns:
+            Un dictionnaire contenant le chemin du fichier audio
+        """
+        try:
+            # Déterminer le speaker_id
+            speaker_id = voice or self._get_speaker_id(None)
+            
+            # Générer un nom de fichier unique
+            import uuid
+            import os
+            from core.config import settings
+            
+            filename = f"tts-{uuid.uuid4()}.wav"
+            file_path = os.path.join(settings.AUDIO_STORAGE_PATH, filename)
+            
+            # Préparer la requête
+            payload = {
+                "text": text,
+                "speaker_id": speaker_id,
+                "language_id": language,
+                "speed": speed,
+                "response_format": "wav"
+            }
+            
+            # Créer une session HTTP asynchrone
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                # Faire la requête POST
+                async with session.post(self.api_url, json=payload) as response:
+                    if response.status == 200:
+                        # Lire la réponse
+                        audio_data = await response.read()
+                        
+                        # Sauvegarder le fichier audio
+                        with open(file_path, "wb") as f:
+                            f.write(audio_data)
+                        
+                        logger.info(f"Synthèse vocale réussie: {file_path}")
+                        
+                        # Retourner le chemin du fichier
+                        return {
+                            "file_path": file_path,
+                            "size": len(audio_data)
+                        }
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Erreur API TTS ({response.status}): {error_text}")
+                        raise RuntimeError(f"Erreur API TTS ({response.status}): {error_text}")
+        except Exception as e:
+            logger.error(f"Erreur lors de la synthèse vocale: {e}", exc_info=True)
+            raise RuntimeError(f"Erreur lors de la synthèse vocale: {str(e)}")
