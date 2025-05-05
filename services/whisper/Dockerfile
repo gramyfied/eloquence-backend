@@ -1,5 +1,6 @@
 # Utiliser une image Python officielle comme base
-FROM python:3.12-slim
+# Changer pour une version de Python potentiellement plus compatible avec PyAV
+FROM python:3.10-slim
 
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
@@ -35,7 +36,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     python-multipart==0.0.6 \
     soundfile==0.12.1 \
     numpy==1.26.0 \
-    av==9.2.0 # Spécifier une version de PyAV potentiellement plus stable
+    av # Utiliser la dernière version de PyAV
 
 # Copier le code de l'application
 COPY app.py .

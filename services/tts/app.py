@@ -72,16 +72,31 @@ async def startup_event():
     try:
         from TTS.api import TTS
         
-        # Charger le modèle VITS pour le français
-        logger.info("Chargement du modèle VITS pour le français...")
-        tts_model = TTS(model_path=os.path.join(MODELS_PATH, "tts_models/fr/mai/vits-nathalie-hifigan"), 
-                        config_path=None)
+        # Définir les noms de modèles et vérifier les chemins
+        model_fr_name = "tts_models/fr/mai/tacotron2-DDC"
+        model_fr_path = os.path.join(MODELS_PATH, "tts_models--fr--mai--tacotron2-DDC")
+        model_xtts_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+        model_xtts_path = os.path.join(MODELS_PATH, "tts_models--multilingual--multi-dataset--xtts_v2")
+
+        logger.info(f"Vérification de l'existence de {model_fr_path}")
+        if not os.path.isdir(model_fr_path):
+            logger.error(f"Répertoire du modèle français introuvable: {model_fr_path}")
+            raise RuntimeError(f"Modèle français introuvable: {model_fr_path}")
+            
+        logger.info("Chargement du modèle Tacotron2 pour le français...")
+        # Essayer de charger par nom, la bibliothèque devrait chercher dans les chemins connus
+        tts_model = TTS(model_name=model_fr_name, progress_bar=False, gpu=False)
         
         # Charger le modèle XTTS v2 si activé
         if USE_XTTS:
+            logger.info(f"Vérification de l'existence de {model_xtts_path}")
+            if not os.path.isdir(model_xtts_path):
+                logger.error(f"Répertoire du modèle XTTS introuvable: {model_xtts_path}")
+                raise RuntimeError(f"Modèle XTTS introuvable: {model_xtts_path}")
+
             logger.info("Chargement du modèle XTTS v2...")
-            xtts_model = TTS(model_path=os.path.join(MODELS_PATH, "tts_models/multilingual/multi-dataset/xtts_v2"), 
-                            config_path=None)
+            # Essayer de charger par nom
+            xtts_model = TTS(model_name=model_xtts_name, progress_bar=False, gpu=False)
         else:
             xtts_model = None
             
@@ -128,11 +143,24 @@ async def synthesize_speech(request: TTSRequest):
                 speaker_id = EMOTION_TO_SPEAKER_ID.get(request.speaker_id, EMOTION_TO_SPEAKER_ID["neutre"])
                 logger.info(f"Synthèse VITS avec speaker_id: {speaker_id}")
                 
-                tts_model.tts_to_file(
-                    text=request.text,
-                    file_path=output_path,
-                    speaker=speaker_id
-                )
+                # Vérifier si le modèle est multi-locuteur
+                try:
+                    # Essayer d'abord sans le paramètre speaker
+                    tts_model.tts_to_file(
+                        text=request.text,
+                        file_path=output_path
+                    )
+                except Exception as e:
+                    if "speaker" in str(e) and "required" in str(e):
+                        # Si l'erreur indique que speaker est requis, alors c'est un modèle multi-locuteur
+                        tts_model.tts_to_file(
+                            text=request.text,
+                            file_path=output_path,
+                            speaker=speaker_id
+                        )
+                    else:
+                        # Propager l'erreur si c'est autre chose
+                        raise
             
             # Marquer la tâche comme terminée
             active_tasks[task_id]["completed"] = True

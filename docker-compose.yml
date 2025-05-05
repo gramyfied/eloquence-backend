@@ -104,16 +104,29 @@ services:
     networks:
       - eloquence-network
 
-# Définir les services IA (exemples, à adapter)
-#  asr-service:
-#    image: your-faster-whisper-image
-#    ports:
-#      - "8001:8001"
-#    networks:
-#      - eloquence-network
-#    # ... config GPU, volumes modèles ...
+# Définir les services IA
+  asr-service:
+    build:
+      context: ./services/whisper # Utiliser le Dockerfile local
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000" # Port 8001 sur l'hôte mappé sur le port 8000 du conteneur
+    networks:
+      - eloquence-network
+    restart: unless-stopped
+    # Ajoutez ici la configuration GPU si nécessaire (dépend de votre Dockerfile et environnement)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # Ajoutez les volumes pour les modèles si nécessaire
+    # volumes:
+    #   - ./data/models/whisper:/root/.cache/faster_whisper
 
-#  llm-service:
+#  llm-service: # Le LLM est maintenant externe (Scaleway), donc ce service local n'est plus nécessaire
 #    image: your-vllm-mistral-image
 #    ports:
 #      - "8002:8000" # Port interne vLLM souvent 8000
@@ -121,13 +134,26 @@ services:
 #      - eloquence-network
 #    # ... config GPU, volumes modèles ...
 
-#  tts-service:
-#    image: your-coqui-tts-image
-#    ports:
-#      - "5002:5002"
-#    networks:
-#      - eloquence-network
-#    # ... config GPU, volumes modèles ...
+  tts-service:
+    build:
+      context: ./services/tts # Utiliser le Dockerfile local
+      dockerfile: Dockerfile
+    ports:
+      - "5002:5002" # Port exposé sur l'hôte
+    networks:
+      - eloquence-network
+    restart: unless-stopped
+    # Ajoutez ici la configuration GPU si nécessaire
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # Ajoutez les volumes pour les modèles si nécessaire
+    # volumes:
+    #   - ./data/models/tts:/root/.local/share/tts
 
 volumes:
   postgres_data:

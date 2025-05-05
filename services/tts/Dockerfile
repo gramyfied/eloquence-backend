@@ -1,5 +1,5 @@
 # Utiliser une image Python officielle comme base
-FROM python:3.10-slim
+FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-runtime
 
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
@@ -8,6 +8,10 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
+# Variables d'environnement pour les installations non interactives
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TTS_USE_XTTS=false
+
 # Installer les dépendances système nécessaires
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -15,18 +19,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     espeak-ng \
     git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Installer TTS et ses dépendances
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-    TTS==0.21.1 \
+    TTS==0.17.0 \
     fastapi==0.104.1 \
     uvicorn==0.23.2 \
     python-multipart==0.0.6 \
     soundfile==0.12.1 \
-    numpy==1.26.0 \
-    pydub==0.25.1
+    numpy==1.22.0 \
+    pydub==0.25.1 && \
+    pip install --no-cache-dir --force-reinstall torch==2.0.1
 
 # Créer les répertoires pour les modèles et les speakers
 RUN mkdir -p /app/models /app/speakers

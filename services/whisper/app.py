@@ -13,8 +13,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("whisper-service")
 
 # Récupérer les variables d'environnement
-MODEL_NAME = os.environ.get("ASR_MODEL_NAME", "large-v3")
-DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda" ou "cpu"
+MODEL_NAME = os.environ.get("ASR_MODEL_NAME", "large-v2") # Utiliser large-v2 par défaut
+DEVICE = os.environ.get("ASR_DEVICE", "cpu")  # "cuda" ou "cpu" - Forcer CPU par défaut à cause de l'incompatibilité CUDA
 COMPUTE_TYPE = os.environ.get("ASR_COMPUTE_TYPE", "int8")  # "int8", "float16", "float32"
 
 app = FastAPI(title="Whisper ASR Service")
