@@ -4,8 +4,9 @@ Point d'entrée principal de l'application Eloquence Backend (mode sans base de 
 """
 
 import logging
+import time
 import os
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -21,7 +22,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Initialisation de l'application FastAPI
+# Initialisation de l'application
+
 app = FastAPI(
     title="Eloquence Backend API (Mode Sans Base de Données)",
     description="API pour le système de coaching vocal Eloquence - Mode de diagnostic sans base de données",
@@ -146,6 +148,90 @@ async def test_coaching_init():
 @app.get("/api/session/start")
 async def test_session_start():
     return {"status": "mock", "session_id": "test-session-123", "message": "Session simulée en mode sans base de données"}
+
+# Endpoints de session ajoutés
+@app.post("/api/session/start")
+async def mock_session_start():
+    # Endpoint simulé pour démarrer une session
+    return {
+        "status": "mock",
+        "session_id": "mock-session-" + str(int(time.time())),
+        "message": "Session simulée en mode sans base de données"
+    }
+
+@app.get("/api/session/{session_id}/feedback")
+async def mock_session_feedback(session_id: str):
+    # Endpoint simulé pour obtenir le feedback d'une session
+    return {
+        "status": "mock",
+        "session_id": session_id,
+        "feedback": {
+            "fluency": 8,
+            "pronunciation": 7,
+            "grammar": 9,
+            "vocabulary": 8,
+            "overall": 8
+        },
+        "message": "Feedback simulé en mode sans base de données"
+    }
+
+# Endpoint de chat
+@app.post("/chat/")
+async def mock_chat():
+    # Endpoint simulé pour le chat
+    return {
+        "status": "mock",
+        "message": "Réponse de chat simulée en mode sans base de données",
+        "response": "Bonjour, je suis un assistant virtuel simulé. Comment puis-je vous aider aujourd'hui?"
+    }
+
+# Endpoint d'exercice
+@app.post("/coaching/exercise/generate")
+async def mock_exercise_generate():
+    # Endpoint simulé pour générer un exercice de coaching
+    return {
+        "status": "mock",
+        "exercise_id": "mock-exercise-" + str(int(time.time())),
+        "title": "Exercice de présentation",
+        "description": "Présentez-vous en français pendant 1 minute",
+        "message": "Exercice simulé en mode sans base de données"
+    }
+
+# Endpoints API TTS et STT avec paramètres
+@app.post("/api/tts")
+async def mock_tts_with_params(text: str = Query(...)):
+    # Endpoint simulé pour la synthèse vocale
+    return {
+        "status": "mock",
+        "text": text,
+        "audio_id": "mock-audio-" + str(int(time.time())),
+        "message": "Synthèse vocale simulée en mode sans base de données"
+    }
+
+@app.post("/api/stt")
+async def mock_stt_with_params(audio_id: str = Query(...)):
+    # Endpoint simulé pour la reconnaissance vocale
+    return {
+        "status": "mock",
+        "audio_id": audio_id,
+        "text": "Ceci est une transcription simulée pour le test.",
+        "message": "Reconnaissance vocale simulée en mode sans base de données"
+    }
+
+# Endpoint de monitoring
+@app.get("/api/monitoring/latency")
+async def mock_monitoring_latency():
+    # Endpoint simulé pour le monitoring de latence
+    return {
+        "status": "mock",
+        "latency": {
+            "tts": 150,
+            "stt": 200,
+            "llm": 300,
+            "total": 650
+        },
+        "message": "Latence simulée en mode sans base de données"
+    }
 
 if __name__ == "__main__":
     import uvicorn
