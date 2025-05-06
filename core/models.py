@@ -48,7 +48,8 @@ class CoachingSession(Base):
     language = Column(String(10), default='fr')
     goal = Column(Text, nullable=True) # Objectif spécifique de cette session
     current_scenario_state = Column(JSON, nullable=True) # État actuel (ex: étape, variables remplies)
-    is_multi_agent = Column(Boolean, default=False) # Indique si la session utilise plusieurs agents
+    # La colonne is_multi_agent est commentée car elle n'existe pas encore dans la base de données
+    # is_multi_agent = Column(Boolean, default=False) # Indique si la session utilise plusieurs agents
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     ended_at = Column(DateTime, nullable=True)
     status = Column(String(20), default="active") # Ex: active, ended, error

@@ -35,7 +35,7 @@ from services.kaldi_service import kaldi_service # Importer l'instance du servic
 # Importer le manager ici car l'orchestrateur peut le faire sans cycle
 from app.websocket import manager as websocket_manager
 from core.config import settings
-from core.models import CoachingSession, SessionTurn, ScenarioTemplate # Importer les modèles DB
+from core.models import CoachingSession, SessionTurn, ScenarioTemplate, Participant, AgentProfile # Importer les modèles DB
 # Importer selectinload pour charger les relations
 from sqlalchemy.orm import selectinload
 
@@ -94,7 +94,7 @@ class SessionState:
         self.goal: Optional[str] = goal  # Objectif spécifique session
         self.scenario_template: Optional[ScenarioTemplate] = scenario_template  # Template chargé
         self.current_scenario_state: Dict = current_scenario_state or {}  # État actuel du scénario
-        self.is_multi_agent: bool = is_multi_agent  # Indique si la session utilise plusieurs agents
+        self.is_multi_agent: bool = False  # Valeur par défaut car la colonne n'existe pas encore dans la base de données
         self.participants: Dict[uuid.UUID, ParticipantState] = {}  # Participants indexés par ID
         self.primary_user_id: Optional[uuid.UUID] = None  # ID du participant utilisateur principal
         self.primary_agent_id: Optional[uuid.UUID] = None  # ID du participant agent principal
@@ -217,7 +217,12 @@ class Orchestrator:
                 # Utiliser les valeurs de la DB
                 language = db_session.language
                 goal = db_session.goal
-                is_multi_agent = db_session.is_multi_agent
+                # Gérer le cas où la colonne is_multi_agent n'existe pas encore dans la base de données
+                try:
+                    is_multi_agent = db_session.is_multi_agent
+                except AttributeError:
+                    logger.warning(f"La colonne 'is_multi_agent' n'existe pas dans la table 'coaching_sessions'. Utilisation de la valeur par défaut: False")
+                    is_multi_agent = False
                 # Vérifier que goal n'est pas None pour le debug
                 logger.debug(f"Session {session_id_str}: goal from DB = {goal}")
                 # Ajouter une vérification explicite
@@ -293,6 +298,7 @@ class Orchestrator:
                     }
                     
                     logger.info(f"État initial du scénario créé pour la session {session_id_str}, étape initiale: {first_step}")
+                # Créer une nouvelle session sans inclure la colonne is_multi_agent
                 db_session = CoachingSession(
                     id=session_uuid,
                     user_id=user_id,
@@ -300,7 +306,6 @@ class Orchestrator:
                     language=language,
                     goal=goal,
                     status='active',
-                    is_multi_agent=is_multi_agent,
                     current_scenario_state=current_scenario_state
                 )
                 db.add(db_session)
@@ -337,68 +342,68 @@ class Orchestrator:
             await db.rollback() # Assurer le rollback en cas d'erreur
             return None
 
-async def _create_default_participants(self, db: AsyncSession, db_session: CoachingSession, session_state: SessionState, user_id: str, agent_profile_id: Optional[str] = None) -> None:
-    """
-    Crée les participants par défaut pour une session.
-    Pour une session standard, crée un utilisateur et un agent coach.
-    """
-    # Créer le participant utilisateur
-    user_participant = Participant(
-        session_id=db_session.id,
-        name=f"Utilisateur {user_id}",
-        role="user",
-        is_primary=True
-    )
-    db.add(user_participant)
-    await db.flush()
-    
-    # Créer l'état du participant utilisateur
-    user_participant_state = ParticipantState(
-        participant_id=user_participant.id,
-        name=user_participant.name,
-        role=user_participant.role,
-        is_primary=user_participant.is_primary
-    )
-    session_state.add_participant(user_participant_state)
-    
-    # Créer le participant agent (coach par défaut)
-    agent_profile_id = agent_profile_id or "coach"  # Utiliser "coach" comme profil par défaut
-    agent_name = "Coach IA"
-    agent_voice_id = None
-    
-    # Charger le profil d'agent si disponible
-    agent_profile_result = await db.execute(select(AgentProfile).where(AgentProfile.id == agent_profile_id))
-    agent_profile = agent_profile_result.scalar_one_or_none()
-    if agent_profile:
-        agent_name = agent_profile.name
-        agent_voice_id = agent_profile.voice_id
-    
-    agent_participant = Participant(
-        session_id=db_session.id,
-        agent_profile_id=agent_profile_id,
-        name=agent_name,
-        role="agent",
-        is_primary=True,
-        voice_id=agent_voice_id
-    )
-    db.add(agent_participant)
-    await db.flush()
-    
-    # Créer l'état du participant agent
-    agent_participant_state = ParticipantState(
-        participant_id=agent_participant.id,
-        name=agent_participant.name,
-        role=agent_participant.role,
-        is_primary=agent_participant.is_primary,
-        agent_profile_id=agent_participant.agent_profile_id,
-        voice_id=agent_participant.voice_id
-    )
-    
-    # Définir le prompt système si disponible
-    if agent_profile and agent_profile.system_prompt:
-        agent_participant_state.system_prompt = agent_profile.system_prompt
+    async def _create_default_participants(self, db: AsyncSession, db_session: CoachingSession, session_state: SessionState, user_id: str, agent_profile_id: Optional[str] = None) -> None:
+        """
+        Crée les participants par défaut pour une session.
+        Pour une session standard, crée un utilisateur et un agent coach.
+        """
+        # Créer le participant utilisateur
+        user_participant = Participant(
+            session_id=db_session.id,
+            name=f"Utilisateur {user_id}",
+            role="user",
+            is_primary=True
+        )
+        db.add(user_participant)
+        await db.flush()
         
-    session_state.add_participant(agent_participant_state)
+        # Créer l'état du participant utilisateur
+        user_participant_state = ParticipantState(
+            participant_id=user_participant.id,
+            name=user_participant.name,
+            role=user_participant.role,
+            is_primary=user_participant.is_primary
+        )
+        session_state.add_participant(user_participant_state)
+        
+        # Créer le participant agent (coach par défaut)
+        agent_profile_id = agent_profile_id or "coach"  # Utiliser "coach" comme profil par défaut
+        agent_name = "Coach IA"
+        agent_voice_id = None
+        
+        # Charger le profil d'agent si disponible
+        agent_profile_result = await db.execute(select(AgentProfile).where(AgentProfile.id == agent_profile_id))
+        agent_profile = agent_profile_result.scalar_one_or_none()
+        if agent_profile:
+            agent_name = agent_profile.name
+            agent_voice_id = agent_profile.voice_id
+        
+        agent_participant = Participant(
+            session_id=db_session.id,
+            agent_profile_id=agent_profile_id,
+            name=agent_name,
+            role="agent",
+            is_primary=True,
+            voice_id=agent_voice_id
+        )
+        db.add(agent_participant)
+        await db.flush()
+        
+        # Créer l'état du participant agent
+        agent_participant_state = ParticipantState(
+            participant_id=agent_participant.id,
+            name=agent_participant.name,
+            role=agent_participant.role,
+            is_primary=agent_participant.is_primary,
+            agent_profile_id=agent_participant.agent_profile_id,
+            voice_id=agent_participant.voice_id
+        )
+        
+        # Définir le prompt système si disponible
+        if agent_profile and agent_profile.system_prompt:
+            agent_participant_state.system_prompt = agent_profile.system_prompt
+            
+        session_state.add_participant(agent_participant_state)
     @measure_latency(STEP_VAD_PROCESS, "session_id")
     async def process_audio_chunk(self, session_id: str, chunk: bytes, db: AsyncSession):
         """Traite un chunk audio, effectue le VAD et gère les transitions d'état."""
@@ -883,6 +888,32 @@ async def _create_default_participants(self, db: AsyncSession, db_session: Coach
             logger.error(f"Erreur lors de la génération de l'exercice '{exercise_type}': {e}", exc_info=True)
             # Remonter l'exception pour que la route API puisse retourner une erreur 500
             raise Exception(f"Impossible de générer le texte pour l'exercice: {e}")
+            
+    async def end_session(self, session_id: uuid.UUID) -> None:
+        """
+        Termine une session de coaching.
+        Met à jour le statut de la session et nettoie les ressources associées.
+        
+        Args:
+            session_id (uuid.UUID): L'ID de la session à terminer.
+            
+        Returns:
+            None
+        """
+        session_id_str = str(session_id)
+        logger.info(f"Demande de fin de session: {session_id_str}")
+        
+        # Vérifier si la session existe en mémoire
+        if session_id_str not in self.sessions:
+            logger.warning(f"Session {session_id_str} non trouvée en mémoire lors de end_session.")
+            return
+            
+        # Nettoyer la session (utiliser la méthode existante)
+        # Note: cleanup_session s'occupe déjà de mettre à jour le statut en DB
+        # et de nettoyer les ressources en mémoire
+        await self.cleanup_session(session_id_str, None)
+        
+        logger.info(f"Session {session_id_str} terminée avec succès.")
 
 
 # Instance globale de l'orchestrateur
