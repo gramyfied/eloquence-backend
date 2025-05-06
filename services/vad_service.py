@@ -40,10 +40,10 @@ class VadService:
         try:
             logger.info("Début du chargement du modèle VAD PyTorch via torch.hub.load...")
             
-            # Télécharger et charger le modèle PyTorch
+            # Télécharger et charger le modèle PyTorch (sans force_reload pour utiliser le cache)
             self.model, self.utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                            model='silero_vad',
-                                           force_reload=True)
+                                           force_reload=False)
             logger.info("Modèle VAD PyTorch téléchargé et chargé en mémoire.")
 
             logger.info("Mise en mode évaluation du modèle VAD PyTorch...")

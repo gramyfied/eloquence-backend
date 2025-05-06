@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     if not SUPABASE_PROJECT_REF or not SUPABASE_DB_PASSWORD:
         raise ValueError("SUPABASE_PROJECT_REF and SUPABASE_DB_PASSWORD must be set in .env or environment variables")
 
-    DATABASE_URL: str = f"postgresql+asyncpg://postgres.{SUPABASE_PROJECT_REF}:{SUPABASE_DB_PASSWORD}@aws-0-{SUPABASE_REGION}.pooler.supabase.com:6543/postgres"
+    DATABASE_URL: str = f"postgresql+asyncpg://postgres.{SUPABASE_PROJECT_REF}:{SUPABASE_DB_PASSWORD}@aws-0-{SUPABASE_REGION}.pooler.supabase.com:6543/postgres?prepared_statement_cache_size=0"
     
     # Redis
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")

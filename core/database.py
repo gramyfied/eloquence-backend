@@ -1,7 +1,10 @@
 import asyncio
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker as sync_sessionmaker
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from core.config import settings
 # Importer Base depuis models pour la création de tables
@@ -9,116 +12,126 @@ from core.models import Base
 
 logger = logging.getLogger(__name__)
 
-# Créer le moteur asynchrone
-# Ajouter ?async_fallback=True si le driver ne supporte pas nativement l'async (ex: psycopg2)
-# Préférer asyncpg pour PostgreSQL si possible (pip install asyncpg)
-try:
-    # Assurer que l'URL est compatible async
-    async_db_url = settings.DATABASE_URL
-    
-    # Gérer différents types de bases de données
-    if async_db_url.startswith("postgresql"):
-        if async_db_url.startswith("postgresql+psycopg2"):
-            async_db_url = async_db_url.replace("postgresql+psycopg2", "postgresql+asyncpg", 1)
-            logger.info("Adaptation de l'URL DB pour asyncpg.")
-        elif not async_db_url.startswith("postgresql+asyncpg"):
-            logger.warning(f"Driver DB non asyncpg détecté ({async_db_url}). Assurez-vous que le driver supporte asyncio ou installez asyncpg.")
-            # Tenter avec psycopg si asyncpg n'est pas là (nécessite psycopg[binary] >= 3.1)
-            async_db_url = async_db_url.replace("postgresql+psycopg2", "postgresql+psycopg", 1)
-    elif async_db_url.startswith("sqlite"):
-        # S'assurer que l'URL SQLite est compatible avec aiosqlite
-        if not async_db_url.startswith("sqlite+aiosqlite"):
-            async_db_url = async_db_url.replace("sqlite", "sqlite+aiosqlite", 1)
-            logger.info("Adaptation de l'URL DB pour aiosqlite.")
+# Désactiver complètement la connexion à la base de données
+logger.warning("⚠️ Mode de fonctionnement sans base de données activé")
 
-    # Créer le moteur asynchrone
-    engine = create_async_engine(
-        async_db_url,
-        echo=False,
-        future=True,
-    )
-    logger.info(f"Moteur de base de données asynchrone créé pour: {async_db_url}")
+# Créer une classe de session factice
+class MockSession:
+    async def __aenter__(self):
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+        
+    async def close(self):
+        pass
+        
+    async def commit(self):
+        pass
+        
+    async def rollback(self):
+        pass
+        
+    def add(self, obj):
+        pass
+        
+    def add_all(self, objs):
+        pass
+        
+    def delete(self, obj):
+        pass
+        
+    async def execute(self, *args, **kwargs):
+        class MockResult:
+            def scalars(self):
+                return self
+                
+            def first(self):
+                return None
+                
+            def all(self):
+                return []
+                
+            def scalar(self):
+                return None
+                
+            def scalar_one_or_none(self):
+                return None
+                
+            def mappings(self):
+                return self
+        
+        return MockResult()
+        
+    async def refresh(self, obj):
+        pass
 
-except ImportError as ie:
-    logger.error(f"Driver de base de données non installé: {ie}")
-    if "asyncpg" in str(ie):
-        logger.error("Le driver asyncpg n'est pas installé. Veuillez l'installer: pip install asyncpg")
-    elif "aiosqlite" in str(ie):
-        logger.error("Le driver aiosqlite n'est pas installé. Veuillez l'installer: pip install aiosqlite")
-    engine = None  # Marquer comme non initialisé
+# Fonction pour obtenir une session de base de données factice
+async def get_db():
+    session = MockSession()
+    try:
+        yield session
+    finally:
+        await session.close()
 
-except Exception as e:
-    logger.critical(f"Erreur lors de la création du moteur de base de données asynchrone: {e}")
-    engine = None
-
-# Créer une factory de session asynchrone
-AsyncSessionLocal = sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False, # Important pour l'utilisation avec FastAPI
-    autocommit=False,
-    autoflush=False,
-) if engine else None
-
-async def get_db() -> AsyncSession:
-    """
-    Dépendance FastAPI pour obtenir une session de base de données asynchrone.
-    """
-    if AsyncSessionLocal is None:
-        logger.error("La session de base de données n'a pas pu être initialisée.")
-        raise RuntimeError("Database session not initialized")
-
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
-
-# --- Fonctions d'initialisation (optionnel, préférer Alembic) ---
+# Fonction pour initialiser la base de données (ne fait rien)
 async def init_db():
-    """Initialise la base de données (crée les tables). Préférer Alembic en production."""
-    if not engine:
-        logger.error("Le moteur de base de données n'est pas initialisé, impossible de créer les tables.")
-        return
-    async with engine.begin() as conn:
-        try:
-            # Importer Base ici pour éviter les dépendances circulaires
-            from core.models import Base
-            logger.info("Création des tables de la base de données (si elles n'existent pas)...")
-            # await conn.run_sync(Base.metadata.drop_all) # Pour réinitialiser pendant le dev
-            await conn.run_sync(Base.metadata.create_all)
-            logger.info("Tables créées (ou déjà existantes).")
-        except Exception as e:
-            logger.error(f"Erreur lors de la création des tables: {e}")
+    logger.info("✅ Mode sans base de données activé.")
 
-async def close_db():
-    """Ferme proprement le moteur de base de données."""
-    if engine:
-        logger.info("Fermeture du moteur de base de données.")
-        await engine.dispose()
-from sqlalchemy import create_engine as create_sync_engine
+# Créer une classe de session synchrone factice
+class MockSyncSession:
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+        
+    def close(self):
+        pass
+        
+    def commit(self):
+        pass
+        
+    def rollback(self):
+        pass
+        
+    def add(self, obj):
+        pass
+        
+    def add_all(self, objs):
+        pass
+        
+    def delete(self, obj):
+        pass
+        
+    def execute(self, *args, **kwargs):
+        class MockResult:
+            def scalars(self):
+                return self
+                
+            def first(self):
+                return None
+                
+            def all(self):
+                return []
+                
+            def scalar(self):
+                return None
+                
+            def scalar_one_or_none(self):
+                return None
+                
+            def mappings(self):
+                return self
+        
+        return MockResult()
+        
+    def refresh(self, obj):
+        pass
 
-# --- Moteur et Session Synchrone (pour Celery/scripts) ---
-sync_engine = None
-SyncSessionLocal = None
-try:
-    # Utiliser l'URL DB standard (non async)
-    sync_engine = create_sync_engine(settings.DATABASE_URL, echo=False)
-    SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
-    logger.info(f"Moteur de base de données synchrone créé pour: {settings.DATABASE_URL}")
-except Exception as e:
-    logger.error(f"Impossible de créer le moteur de base de données synchrone: {e}")
-
+# Fonction pour obtenir une session de base de données synchrone factice
 def get_sync_db():
-    """Fournit une session DB synchrone (pour Celery)."""
-    if SyncSessionLocal is None:
-        logger.error("La session de base de données synchrone n'a pas pu être initialisée.")
-        raise RuntimeError("Sync Database session not initialized")
-    db = SyncSessionLocal()
+    db = MockSyncSession()
     try:
         yield db
     finally:

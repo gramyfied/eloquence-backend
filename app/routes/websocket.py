@@ -4,6 +4,16 @@ Gère les connexions WebSocket pour le streaming audio bidirectionnel.
 """
 
 import logging
+
+# Variable globale pour stocker l'orchestrateur en mode sans base de données
+_orchestrator_instance = None
+
+def set_orchestrator(orchestrator):
+    # Définit l'instance globale de l'orchestrateur pour le mode sans base de données
+    global _orchestrator_instance
+    _orchestrator_instance = orchestrator
+    return orchestrator
+
 from typing import Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
