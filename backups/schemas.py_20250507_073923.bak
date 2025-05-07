@@ -45,19 +45,6 @@ class FeedbackResponse(BaseModel):
     session_id: uuid.UUID
     feedback_results: List[FeedbackResultItem]
 
-# --- Schémas pour le Chat ---
-
-class ChatRequest(BaseModel):
-    """Modèle pour les requêtes de chat."""
-    message: str
-    context: Optional[str] = None
-
-class ChatResponse(BaseModel):
-    """Modèle pour les réponses de chat."""
-    status: str
-    message: str
-    data: Dict[str, Any]
-
 # --- Autres Schémas (si nécessaire pour d'autres endpoints) ---
 
 # Schémas pour /session/start

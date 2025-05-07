@@ -1,0 +1,403 @@
+import asyncio
+import logging
+import time
+from typing import AsyncGenerator, Optional, Dict, Any
+from contextlib import asynccontextmanager
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session as SyncSession
+from sqlalchemy.orm import sessionmaker as sync_sessionmaker
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DisconnectionError
+from sqlalchemy.pool import NullPool
+
+from core.config import settings
+from core.models import Base
+
+logger = logging.getLogger(__name__)
+
+# Configuration du pool de connexions
+POOL_SIZE = 5
+MAX_OVERFLOW = 10
+POOL_TIMEOUT = 30
+POOL_RECYCLE = 1800  # 30 minutes
+CONNECT_TIMEOUT = 10
+COMMAND_TIMEOUT = 30
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # secondes
+
+# Variables globales pour le moteur et le mode de fonctionnement
+_engine: Optional[AsyncEngine] = None
+_sync_engine = None
+_db_mode = "mock"  # "mock" ou "real"
+
+# Fonction pour initialiser le moteur de base de données
+async def init_engine() -> AsyncEngine:
+    global _engine, _db_mode
+    
+    try:
+        logger.info("Initialisation du moteur de base de données asynchrone...")
+        
+        # Configuration des options de connexion
+        connect_args = {
+            "command_timeout": COMMAND_TIMEOUT,
+            "timeout": CONNECT_TIMEOUT,
+            "prepared_statement_cache_size": 0,  # Désactiver le cache des prepared statements
+        }
+        
+        # Création du moteur avec pool de connexions optimisé
+        _engine = create_async_engine(
+            settings.DATABASE_URL,
+            echo=settings.DEBUG,
+            pool_size=POOL_SIZE,
+            max_overflow=MAX_OVERFLOW,
+            pool_timeout=POOL_TIMEOUT,
+            pool_recycle=POOL_RECYCLE,
+            pool_pre_ping=True,  # Vérifier la connexion avant utilisation
+            connect_args=connect_args
+        )
+        
+        # Tester la connexion
+        async with _engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+            logger.info("✅ Connexion à la base de données établie avec succès")
+            _db_mode = "real"
+            return _engine
+            
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'initialisation de la connexion à la base de données: {str(e)}")
+        logger.warning("⚠️ Passage en mode sans base de données")
+        _db_mode = "mock"
+        return None
+
+# Fonction pour initialiser le moteur de base de données synchrone
+def init_sync_engine():
+    global _sync_engine, _db_mode
+    
+    try:
+        logger.info("Initialisation du moteur de base de données synchrone...")
+        
+        # Extraire l'URL PostgreSQL standard à partir de l'URL asyncpg
+        # Remplacer postgresql+asyncpg:// par postgresql://
+        sync_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+        
+        # Configuration des options de connexion
+        connect_args = {
+            "connect_timeout": CONNECT_TIMEOUT,
+            "options": f"-c statement_timeout={COMMAND_TIMEOUT * 1000}"  # en ms
+        }
+        
+        # Création du moteur synchrone
+        _sync_engine = create_engine(
+            sync_url,
+            echo=settings.DEBUG,
+            pool_size=POOL_SIZE,
+            max_overflow=MAX_OVERFLOW,
+            pool_timeout=POOL_TIMEOUT,
+            pool_recycle=POOL_RECYCLE,
+            pool_pre_ping=True,
+            connect_args=connect_args
+        )
+        
+        # Tester la connexion
+        with _sync_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            logger.info("✅ Connexion synchrone à la base de données établie avec succès")
+            _db_mode = "real"
+            return _sync_engine
+            
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'initialisation de la connexion synchrone à la base de données: {str(e)}")
+        logger.warning("⚠️ Passage en mode sans base de données")
+        _db_mode = "mock"
+        return None
+
+# Classe de session factice pour le mode sans base de données
+class MockSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    async def close(self):
+        pass
+
+    async def commit(self):
+        pass
+
+    async def rollback(self):
+        pass
+
+    def add(self, obj):
+        pass
+
+    def add_all(self, objs):
+        pass
+
+    def delete(self, obj):
+        pass
+
+    async def execute(self, *args, **kwargs):
+        class MockResult:
+            def scalars(self):
+                return self
+
+            def first(self):
+                return None
+
+            def all(self):
+                return []
+
+            def scalar(self):
+                return None
+
+            def scalar_one_or_none(self):
+                return None
+
+            def mappings(self):
+                return self
+
+        return MockResult()
+
+    async def refresh(self, obj):
+        pass
+
+# Classe de session synchrone factice
+class MockSyncSession:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def close(self):
+        pass
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def add(self, obj):
+        pass
+
+    def add_all(self, objs):
+        pass
+
+    def delete(self, obj):
+        pass
+
+    def execute(self, *args, **kwargs):
+        class MockResult:
+            def scalars(self):
+                return self
+
+            def first(self):
+                return None
+
+            def all(self):
+                return []
+
+            def scalar(self):
+                return None
+
+            def scalar_one_or_none(self):
+                return None
+
+            def mappings(self):
+                return self
+
+        return MockResult()
+
+    def refresh(self, obj):
+        pass
+
+# Fonction pour obtenir une session de base de données avec retry
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    global _engine, _db_mode
+    
+    if _db_mode == "mock":
+        session = MockSession()
+        try:
+            yield session
+        finally:
+            await session.close()
+        return
+    
+    # Créer une session asynchrone
+    async_session = sessionmaker(
+        _engine, 
+        class_=AsyncSession, 
+        expire_on_commit=False,
+        autoflush=False,
+        autocommit=False
+    )
+    
+    # Tentatives avec retry
+    for attempt in range(MAX_RETRIES):
+        try:
+            session = async_session()
+            try:
+                yield session
+            finally:
+                await session.close()
+            break
+        except (OperationalError, DisconnectionError) as e:
+            if attempt < MAX_RETRIES - 1:
+                logger.warning(f"Tentative de connexion {attempt+1}/{MAX_RETRIES} échouée: {str(e)}. Nouvelle tentative dans {RETRY_DELAY}s...")
+                await asyncio.sleep(RETRY_DELAY * (attempt + 1))  # Backoff exponentiel
+            else:
+                logger.error(f"Échec de toutes les tentatives de connexion à la base de données: {str(e)}")
+                logger.warning("⚠️ Passage en mode sans base de données pour cette requête")
+                session = MockSession()
+                try:
+                    yield session
+                finally:
+                    await session.close()
+        except Exception as e:
+            logger.error(f"Erreur inattendue lors de l'accès à la base de données: {str(e)}")
+            logger.warning("⚠️ Passage en mode sans base de données pour cette requête")
+            session = MockSession()
+            try:
+                yield session
+            finally:
+                await session.close()
+
+# Fonction pour obtenir une session de base de données synchrone
+def get_sync_db():
+    global _sync_engine, _db_mode
+    
+    if _db_mode == "mock":
+        db = MockSyncSession()
+        try:
+            yield db
+        finally:
+            db.close()
+        return
+    
+    # Créer une session synchrone
+    SessionLocal = sync_sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=_sync_engine
+    )
+    
+    # Tentatives avec retry
+    for attempt in range(MAX_RETRIES):
+        try:
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+            break
+        except (OperationalError, DisconnectionError) as e:
+            if attempt < MAX_RETRIES - 1:
+                logger.warning(f"Tentative de connexion synchrone {attempt+1}/{MAX_RETRIES} échouée: {str(e)}. Nouvelle tentative dans {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY * (attempt + 1))  # Backoff exponentiel
+            else:
+                logger.error(f"Échec de toutes les tentatives de connexion synchrone à la base de données: {str(e)}")
+                logger.warning("⚠️ Passage en mode sans base de données pour cette requête synchrone")
+                db = MockSyncSession()
+                try:
+                    yield db
+                finally:
+                    db.close()
+        except Exception as e:
+            logger.error(f"Erreur inattendue lors de l'accès synchrone à la base de données: {str(e)}")
+            logger.warning("⚠️ Passage en mode sans base de données pour cette requête synchrone")
+            db = MockSyncSession()
+            try:
+                yield db
+            finally:
+                db.close()
+
+# Fonction pour initialiser la base de données
+async def init_db():
+    global _engine, _db_mode
+    
+    try:
+        # Initialiser le moteur
+        engine = await init_engine()
+        
+        if engine is None:
+            logger.info("✅ Mode sans base de données activé.")
+            return
+        
+        # Créer les tables si elles n'existent pas
+        async with engine.begin() as conn:
+            # Vérifier si les tables existent déjà
+            result = await conn.execute(text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'coaching_sessions')"
+            ))
+            tables_exist = result.scalar()
+            
+            if not tables_exist:
+                logger.info("Création des tables dans la base de données...")
+                await conn.run_sync(Base.metadata.create_all)
+                logger.info("✅ Tables créées avec succès.")
+            else:
+                logger.info("✅ Les tables existent déjà dans la base de données.")
+        
+        logger.info("✅ Base de données initialisée avec succès.")
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'initialisation de la base de données: {str(e)}")
+        logger.warning("⚠️ Passage en mode sans base de données")
+        _db_mode = "mock"
+
+# Fonction pour forcer le mode sans base de données (utile pour les tests)
+def force_mock_mode():
+    global _db_mode
+    _db_mode = "mock"
+    logger.warning("⚠️ Mode sans base de données forcé")
+
+# Fonction pour vérifier l'état de la connexion à la base de données
+async def check_db_connection() -> Dict[str, Any]:
+    global _engine, _db_mode
+    
+    if _db_mode == "mock":
+        return {
+            "status": "mock",
+            "message": "Mode sans base de données activé",
+            "connection": False
+        }
+    
+    try:
+        if _engine is None:
+            return {
+                "status": "error",
+                "message": "Moteur de base de données non initialisé",
+                "connection": False
+            }
+        
+        start_time = time.time()
+        async with _engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+            latency = time.time() - start_time
+            
+            # Obtenir des informations sur le pool de connexions
+            pool_status = {
+                "size": _engine.pool.size(),
+                "checkedin": _engine.pool.checkedin(),
+                "checkedout": _engine.pool.checkedout(),
+                "overflow": _engine.pool.overflow()
+            }
+            
+            return {
+                "status": "ok",
+                "message": "Connexion à la base de données établie",
+                "connection": True,
+                "latency_ms": round(latency * 1000, 2),
+                "pool": pool_status,
+                "url": settings.DATABASE_URL.split("@")[1]  # Ne pas inclure les identifiants
+            }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Erreur de connexion à la base de données: {str(e)}",
+            "connection": False
+        }

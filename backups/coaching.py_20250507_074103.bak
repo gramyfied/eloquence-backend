@@ -1,0 +1,164 @@
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from typing import Optional
+from ..schemas import CoachingSession, CoachingMessage, CoachingResponse, ExerciseResponse
+from ...core.orchestrator import Orchestrator
+from ...core.auth import get_current_user, User
+from ...core.config import settings
+import uuid
+import logging
+
+router = APIRouter(prefix="/coaching", tags=["coaching"])
+logger = logging.getLogger(__name__)
+
+# Permettre à la fois GET et POST pour /coaching/init
+@router.get("/init")
+@router.post("/init")
+async def init_coaching_session(
+    request: Request,
+    user_id: str = Query(..., description="ID de l'utilisateur"),
+    scenario_id: Optional[str] = Query(None, description="ID du scénario (optionnel)"),
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        session_id = str(uuid.uuid4())
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": f"mock-session-{int(uuid.uuid4().time)}",
+                "message": "Session simulée en mode sans base de données"
+            }
+        
+        # Créer une nouvelle session
+        session = await orchestrator.create_session(user_id, scenario_id)
+        return {
+            "status": "success",
+            "session_id": session.session_id,
+            "scenario": session.scenario_name if session.scenario_name else "Session libre"
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de l'initialisation de la session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'initialisation: {str(e)}")
+
+@router.post("/message")
+async def send_message(
+    request: Request,
+    message: CoachingMessage,
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": message.session_id,
+                "response": "Ceci est une réponse simulée pour le test.",
+                "audio_id": f"mock-audio-{int(uuid.uuid4().time)}",
+                "message": "Réponse simulée en mode sans base de données"
+            }
+        
+        # Traiter le message
+        response = await orchestrator.process_message(message.session_id, message.user_message)
+        return {
+            "status": "success",
+            "session_id": message.session_id,
+            "response": response.text,
+            "audio_id": response.audio_id
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement du message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors du traitement: {str(e)}")
+
+@router.post("/interrupt")
+async def interrupt_agent(
+    request: Request,
+    session_id: str = Query(..., description="ID de la session"),
+    interruption_point: str = Query(..., description="Point d'interruption"),
+    user_message: str = Query(..., description="Message de l'utilisateur"),
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": session_id,
+                "response": "Ceci est une réponse d'interruption simulée pour le test.",
+                "audio_id": f"mock-audio-{int(uuid.uuid4().time)}",
+                "message": "Interruption simulée en mode sans base de données"
+            }
+        
+        # Traiter l'interruption
+        response = await orchestrator.process_interruption(session_id, interruption_point, user_message)
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "response": response.text,
+            "audio_id": response.audio_id
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement de l'interruption: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'interruption: {str(e)}")
+
+@router.post("/end")
+@router.get("/end")
+async def end_coaching_session(
+    request: Request,
+    session_id: str = Query(..., description="ID de la session"),
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": session_id,
+                "message": "Session terminée en mode sans base de données"
+            }
+        
+        # Terminer la session
+        await orchestrator.end_session(session_id)
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "message": "Session terminée avec succès"
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la fin de la session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la fin de session: {str(e)}")
+
+@router.get("/exercise/generate")
+async def generate_exercise(
+    request: Request,
+    exercise_type: str = Query(..., description="Type d'exercice"),
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "exercise_id": f"mock-exercise-{int(uuid.uuid4().time)}",
+                "title": "Exercice de présentation",
+                "description": "Présentez-vous en français pendant 1 minute.",
+                "instructions": "Parlez clairement et utilisez un vocabulaire varié.",
+                "message": "Exercice généré en mode sans base de données"
+            }
+        
+        # Générer un exercice
+        exercise = await orchestrator.generate_exercise(exercise_type)
+        return {
+            "status": "success",
+            "exercise_id": exercise.exercise_id,
+            "title": exercise.title,
+            "description": exercise.description,
+            "instructions": exercise.instructions
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la génération de l'exercice: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la génération: {str(e)}")

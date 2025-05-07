@@ -1,0 +1,96 @@
+import aiohttp
+import logging
+import os
+import json
+from typing import Optional, Dict, Any
+from core.config import settings
+
+logger = logging.getLogger(__name__)
+
+class ASRService:
+    """Service pour la reconnaissance automatique de la parole (ASR)"""
+    
+    def __init__(self, asr_url: Optional[str] = None):
+        """Initialise le service ASR avec l'URL du service"""
+        self.asr_url = asr_url or settings.asr_url
+        logger.info(f"Service ASR initialisé avec l'URL: {self.asr_url}")
+        
+    async def health_check(self) -> Dict[str, Any]:
+        """Vérifie l'état du service ASR"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.asr_url}/health", timeout=10) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"Erreur lors du health check ASR: {response.status}")
+                        return {"status": "error", "message": f"Erreur {response.status}"}
+        except Exception as e:
+            logger.error(f"Exception lors du health check ASR: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    async def transcribe_audio(self, audio_data: bytes, language: str = "fr") -> Dict[str, Any]:
+        """
+        Transcrit un fichier audio en texte
+        
+        Args:
+            audio_data: Données audio en bytes
+            language: Code de langue (par défaut: fr)
+            
+        Returns:
+            Dictionnaire contenant la transcription et les métadonnées
+        """
+        try:
+            # Augmenter le timeout à 60 secondes pour les fichiers audio volumineux
+            timeout = aiohttp.ClientTimeout(total=60)
+            
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                form_data = aiohttp.FormData()
+                form_data.add_field('file', audio_data, filename='audio.wav', content_type='audio/wav')
+                
+                logger.info(f"Envoi de {len(audio_data)} octets au service ASR ({self.asr_url}/asr)")
+                
+                async with session.post(
+                    f"{self.asr_url}/asr",
+                    data=form_data,
+                    params={"language": language}
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Transcription réussie: {result.get('text', '')[:50]}...")
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Erreur lors de la transcription: {response.status}, {error_text}")
+                        return {
+                            "status": "error",
+                            "error": f"Erreur {response.status}",
+                            "details": error_text
+                        }
+        except Exception as e:
+            logger.error(f"Exception lors de la transcription: {str(e)}")
+            return {"status": "error", "error": str(e)}
+    
+    async def transcribe_audio_file(self, file_path: str, language: str = "fr") -> Dict[str, Any]:
+        """
+        Transcrit un fichier audio à partir de son chemin
+        
+        Args:
+            file_path: Chemin vers le fichier audio
+            language: Code de langue (par défaut: fr)
+            
+        Returns:
+            Dictionnaire contenant la transcription et les métadonnées
+        """
+        try:
+            if not os.path.exists(file_path):
+                logger.error(f"Fichier audio non trouvé: {file_path}")
+                return {"status": "error", "error": "Fichier non trouvé"}
+            
+            with open(file_path, "rb") as f:
+                audio_data = f.read()
+            
+            return await self.transcribe_audio(audio_data, language)
+        except Exception as e:
+            logger.error(f"Exception lors de la transcription du fichier: {str(e)}")
+            return {"status": "error", "error": str(e)}

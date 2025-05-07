@@ -1,0 +1,11 @@
+"""
+Patch pour corriger l'importation de weight_norm dans torch.nn.utils.parametrizations
+"""
+import sys
+import torch.nn.utils
+
+# Ajouter weight_norm au module torch.nn.utils.parametrizations
+if not hasattr(torch.nn.utils.parametrizations, 'weight_norm'):
+    # Utiliser weight_norm de torch.nn.utils
+    torch.nn.utils.parametrizations.weight_norm = torch.nn.utils.weight_norm
+    print("Patch appliqué: weight_norm ajouté à torch.nn.utils.parametrizations")

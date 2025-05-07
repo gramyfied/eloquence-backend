@@ -1,17 +1,23 @@
-
 """
-Point d'entrée principal de l'application Eloquence Backend (mode sans base de données).
+Point d'entrée principal de l'application Eloquence Backend.
 """
 
 import logging
-import time
 import os
-import uuid
-from fastapi import FastAPI, Query, HTTPException, status
-from core.config import settings
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
+
+# Importer les routeurs
+from app.routes.session import router as session_router
+from app.routes.audio import router as audio_router
+from app.routes.chat import router as chat_router
+from app.routes.coaching import router as coaching_router
+from app.routes.monitoring import router as monitoring_router
+
+from core.config import settings
+from core.database import init_db
 
 # Configuration du logging
 logging.basicConfig(
@@ -25,10 +31,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialisation de l'application
-
 app = FastAPI(
-    title="Eloquence Backend API (Mode Sans Base de Données)",
-    description="API pour le système de coaching vocal Eloquence - Mode de diagnostic sans base de données",
+    title="Eloquence Backend API",
+    description="API pour le système de coaching vocal Eloquence",
     version="1.0.0",
 )
 
@@ -41,14 +46,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Inclure les routeurs
+app.include_router(session_router, prefix="/api")
+app.include_router(audio_router, prefix="/api")
+app.include_router(chat_router, prefix="/chat")
+app.include_router(coaching_router, prefix="/coaching")
+app.include_router(monitoring_router, prefix="/api")
+
+# Servir les fichiers statiques
+app.mount("/audio", StaticFiles(directory=settings.AUDIO_STORAGE_PATH), name="audio")
+
 # Événements de démarrage et d'arrêt
 @app.on_event("startup")
 async def startup_event():
     """
     Événement exécuté au démarrage de l'application.
     """
-    logger.info("Démarrage de l'application Eloquence Backend en mode sans base de données")
-    logger.warning("⚠️ Mode sans base de données activé - Fonctionnalités limitées")
+    if settings.IS_TESTING:
+        logger.info("Démarrage de l'application Eloquence Backend en mode test")
+    else:
+        logger.info("Démarrage de l'application Eloquence Backend en mode production")
+    
+    # Créer les répertoires de stockage s'ils n'existent pas
+    os.makedirs(settings.AUDIO_STORAGE_PATH, exist_ok=True)
+    os.makedirs(settings.FEEDBACK_STORAGE_PATH, exist_ok=True)
+    os.makedirs(settings.MODEL_STORAGE_PATH, exist_ok=True)
+    os.makedirs(settings.LOG_DIR, exist_ok=True)
+    
+    # Initialiser la base de données
+    try:
+        await init_db()
+        logger.info("Base de données initialisée avec succès")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'initialisation de la base de données: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -63,7 +93,11 @@ async def health_check():
     """
     Vérifie l'état de santé de l'application.
     """
-    return {"status": "ok", "version": "1.0.0", "mode": "sans base de données"}
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "mode": "test" if settings.IS_TESTING else "production"
+    }
 
 # Route racine
 @app.get("/")
@@ -74,7 +108,7 @@ async def root():
     html_content = """
     <html>
         <head>
-            <title>Backend Test Server</title>
+            <title>Eloquence Backend API</title>
             <style>
                 body {
                     font-family: Arial, sans-serif;
@@ -86,9 +120,9 @@ async def root():
                 h1 {
                     color: #4CAF50;
                 }
-                .warning {
-                    background-color: #fff3cd;
-                    color: #856404;
+                .info {
+                    background-color: #e7f3fe;
+                    color: #0c5460;
                     padding: 10px;
                     border-radius: 5px;
                     margin: 20px 0;
@@ -101,13 +135,11 @@ async def root():
             </style>
         </head>
         <body>
-            <h1>Backend Test Server</h1>
-            <p>If you can see this, your connection is working!</p>
+            <h1>Eloquence Backend API</h1>
+            <p>Bienvenue sur l'API Eloquence pour le coaching vocal.</p>
             
-            <div class="warning">
-                <strong>Mode sans base de données activé</strong>
-                <p>Le serveur fonctionne en mode diagnostic sans connexion à la base de données.</p>
-                <p>Seules les routes de base sont disponibles.</p>
+            <div class="info">
+                <strong>Mode:</strong> """ + ("Test (SQLite)" if settings.IS_TESTING else "Production (Supabase)") + """
             </div>
             
             <div class="endpoints">
@@ -115,6 +147,12 @@ async def root():
                 <ul>
                     <li><a href="/health">/health</a> - Vérification de l'état du serveur</li>
                     <li><a href="/docs">/docs</a> - Documentation API</li>
+                    <li><a href="/api/session/start">/api/session/start</a> - Démarrer une session</li>
+                    <li><a href="/api/session/{session_id}/feedback">/api/session/{session_id}/feedback</a> - Obtenir le feedback d'une session</li>
+                    <li><a href="/api/tts">/api/tts</a> - Synthèse vocale</li>
+                    <li><a href="/api/stt">/api/stt</a> - Reconnaissance vocale</li>
+                    <li><a href="/chat/">/chat/</a> - Chat avec l'assistant</li>
+                    <li><a href="/coaching/exercise/generate">/coaching/exercise/generate</a> - Générer un exercice</li>
                 </ul>
             </div>
         </body>
@@ -134,148 +172,11 @@ async def global_exception_handler(request, exc):
         content={"detail": "Une erreur interne est survenue"}
     )
 
-# Ajouter quelques routes de test pour les services principaux
-@app.get("/api/tts")
-async def test_tts():
-    return {"status": "mock", "message": "Service TTS simulé en mode sans base de données"}
-
-@app.get("/api/stt")
-async def test_stt():
-    return {"status": "mock", "message": "Service STT simulé en mode sans base de données"}
-
-@app.get("/coaching/init")
-async def test_coaching_init():
-    return {"status": "mock", "session_id": "test-session-123", "message": "Session de coaching simulée en mode sans base de données"}
-
-@app.get("/api/session/start")
-async def test_session_start():
-    return {"status": "mock", "session_id": "test-session-123", "message": "Session simulée en mode sans base de données"}
-
-# Endpoints de session ajoutés
-@app.post("/api/session/start")
-async def mock_session_start():
-    # Endpoint simulé pour démarrer une session
-    return {
-        "status": "mock",
-        "session_id": "mock-session-" + str(int(time.time())),
-        "message": "Session simulée en mode sans base de données"
-    }
-
-@app.get("/api/session/{session_id}/feedback")
-async def mock_session_feedback(session_id: str):
-    # Endpoint simulé pour obtenir le feedback d'une session
-    return {
-        "status": "mock",
-        "session_id": session_id,
-        "feedback": {
-            "fluency": 8,
-            "pronunciation": 7,
-            "grammar": 9,
-            "vocabulary": 8,
-            "overall": 8
-        },
-        "message": "Feedback simulé en mode sans base de données"
-    }
-
-# Endpoint de chat
-@app.post("/chat/")
-async def mock_chat():
-    # Endpoint simulé pour le chat
-    return {
-        "status": "mock",
-        "message": "Réponse de chat simulée en mode sans base de données",
-        "response": "Bonjour, je suis un assistant virtuel simulé. Comment puis-je vous aider aujourd'hui?"
-    }
-
-# Endpoint d'exercice
-@app.post("/coaching/exercise/generate")
-async def mock_exercise_generate():
-    # Endpoint simulé pour générer un exercice de coaching
-    return {
-        "status": "mock",
-        "exercise_id": "mock-exercise-" + str(int(time.time())),
-        "title": "Exercice de présentation",
-        "description": "Présentez-vous en français pendant 1 minute",
-        "message": "Exercice simulé en mode sans base de données"
-    }
-
-# Endpoints API TTS et STT avec paramètres
-@app.post("/api/tts")
-async def mock_tts_with_params(text: str = Query(...)):
-    try:
-        # Importer le service TTS optimisé
-        from services.tts_service_optimized import tts_service_optimized
-        
-        # Utiliser le service TTS optimisé pour synthétiser
-        audio_data = await tts_service_optimized.synthesize_text(text)
-        
-        # Générer un nom de fichier unique pour stocker l'audio
-        filename = f"tts-{uuid.uuid4()}.wav"
-        file_path = os.path.join(settings.AUDIO_STORAGE_PATH, filename)
-        
-        # Sauvegarder le fichier audio
-        if audio_data:
-            with open(file_path, "wb") as f:
-                f.write(audio_data)
-            
-            return {
-                "status": "success",
-                "text": text,
-                "audio_id": file_path,
-                "message": "Synthèse vocale réussie"
-            }
-        else:
-            return {
-                "status": "error",
-                "message": "Échec de la synthèse vocale"
-            }
-    except Exception as e:
-        logger.error(f"Erreur lors de la synthèse vocale: {e}")
-        return {
-            "status": "error",
-            "message": f"Erreur lors de la synthèse vocale: {str(e)}"
-        }
-
-@app.post("/api/stt")
-async def mock_stt_with_params(audio_id: str = Query(...)):
-    # Endpoint simulé pour la reconnaissance vocale
-    return {
-        "status": "mock",
-        "audio_id": audio_id,
-        "text": "Ceci est une transcription simulée pour le test.",
-        "message": "Reconnaissance vocale simulée en mode sans base de données"
-    }
-
-# Endpoint de monitoring
-@app.get("/api/monitoring/latency")
-async def monitoring_latency():
-    try:
-        # Importer le module de monitoring de latence
-        from core.latency_monitor import get_latency_stats
-        
-        # Récupérer les statistiques de latence réelles
-        stats = get_latency_stats()
-        
-        return stats
-    except Exception as e:
-        logger.error(f"Erreur lors de la récupération des statistiques de latence: {e}")
-        # Retourner des données simulées en cas d'erreur
-        return {
-            "status": "error",
-            "message": f"Erreur lors de la récupération des statistiques de latence: {str(e)}",
-            "fallback_data": {
-                "tts": 150,
-                "stt": 200,
-                "llm": 300,
-                "total": 650
-            }
-        }
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8082,
+        host=settings.HOST,
+        port=settings.PORT,
         reload=True
     )

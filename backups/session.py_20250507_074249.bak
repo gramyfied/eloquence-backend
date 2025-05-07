@@ -1,0 +1,142 @@
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from typing import Optional
+from ..schemas import SessionCreate, SessionResponse, FeedbackResponse
+from eloquence_backend_py.core.orchestrator import Orchestrator
+from eloquence_backend_py.core.auth import get_current_user, User
+from eloquence_backend_py.core.config import settings
+import uuid
+import time
+import logging
+
+router = APIRouter(prefix="/api/session", tags=["session"])
+logger = logging.getLogger(__name__)
+
+@router.post("/start")
+async def start_session(
+    request: Request,
+    session: SessionCreate,
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": f"mock-session-{int(time.time())}",
+                "message": "Session simulée en mode sans base de données"
+            }
+        
+        # Créer une nouvelle session
+        new_session = await orchestrator.create_session(session.user_id, session.scenario_id)
+        return {
+            "status": "success",
+            "session_id": new_session.session_id,
+            "created_at": new_session.created_at,
+            "scenario_id": new_session.scenario_id
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors du démarrage de la session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors du démarrage: {str(e)}")
+
+@router.post("/{session_id}/end")
+async def end_session(
+    request: Request,
+    session_id: str,
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": session_id,
+                "message": "Session terminée en mode sans base de données"
+            }
+        
+        # Terminer la session
+        await orchestrator.end_session(session_id)
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "ended_at": int(time.time())
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la fin de la session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la fin de session: {str(e)}")
+
+@router.get("/{session_id}/feedback")
+async def get_session_feedback(
+    request: Request,
+    session_id: str,
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "session_id": session_id,
+                "feedback": {
+                    "pronunciation_score": 85,
+                    "fluency_score": 78,
+                    "vocabulary_score": 90,
+                    "grammar_score": 82,
+                    "overall_score": 84,
+                    "strengths": ["Bonne prononciation des voyelles", "Vocabulaire riche"],
+                    "areas_to_improve": ["Fluidité des phrases complexes", "Conjugaison des verbes irréguliers"],
+                    "recommendations": ["Pratiquer la lecture à voix haute", "Écouter des podcasts en français"]
+                },
+                "message": "Feedback simulé en mode sans base de données"
+            }
+        
+        # Obtenir le feedback de la session
+        feedback = await orchestrator.get_session_feedback(session_id)
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "feedback": feedback
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la récupération du feedback: {str(e)}")
+
+# Ajouter un endpoint générique pour le feedback sans ID de session
+@router.get("/feedback")
+async def get_latest_feedback(
+    request: Request,
+    user_id: Optional[str] = Query(None, description="ID de l'utilisateur (optionnel)"),
+    current_user: User = Depends(get_current_user) if not settings.disable_auth else None
+):
+    orchestrator = request.app.state.orchestrator
+    try:
+        # Mode simulé si pas de base de données
+        if not orchestrator.db_available:
+            return {
+                "status": "mock",
+                "user_id": user_id if user_id else "anonymous",
+                "feedback": {
+                    "pronunciation_score": 85,
+                    "fluency_score": 78,
+                    "vocabulary_score": 90,
+                    "grammar_score": 82,
+                    "overall_score": 84,
+                    "strengths": ["Bonne prononciation des voyelles", "Vocabulaire riche"],
+                    "areas_to_improve": ["Fluidité des phrases complexes", "Conjugaison des verbes irréguliers"],
+                    "recommendations": ["Pratiquer la lecture à voix haute", "Écouter des podcasts en français"]
+                },
+                "message": "Feedback de la dernière session simulé en mode sans base de données"
+            }
+        
+        # Obtenir le feedback de la dernière session
+        feedback = await orchestrator.get_latest_feedback(user_id)
+        return {
+            "status": "success",
+            "user_id": user_id if user_id else "anonymous",
+            "feedback": feedback
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du dernier feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la récupération du dernier feedback: {str(e)}")

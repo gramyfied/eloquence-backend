@@ -1,257 +1,178 @@
+"""
+Routes pour les services de coaching.
+"""
+
 import logging
+import json
 import uuid
-import datetime
-import logging
-import uuid
-import datetime
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field # Ajout de BaseModel et Field
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Optional, Dict, Any, List
 
 from core.database import get_db
-from core.models import CoachingSession, SessionTurn, ScenarioTemplate
-from core.orchestrator import orchestrator
+from core.auth import get_current_user_id, check_user_access
+from core.models import CoachingSession, ScenarioTemplate, Participant
+from services.llm_service import LlmService
+from services.llm_service_local import LlmServiceLocal
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/coaching", tags=["Coaching"]) # Ajout d'un préfixe pour clarté
 
-# --- Modèles Pydantic ---
+router = APIRouter()
+
 class ExerciseRequest(BaseModel):
-    exercise_type: str = Field(..., description="Type d'exercice (ex: diction, lecture, jeu_de_role_situation)")
-    topic: Optional[str] = Field(None, description="Sujet ou thème de l'exercice")
-    difficulty: Optional[str] = Field("moyen", description="Niveau de difficulté (ex: facile, moyen, difficile)")
-    length: Optional[str] = Field("court", description="Longueur souhaitée (ex: très court, court, moyen, long)")
+    exercise_type: Optional[str] = "diction"
+    difficulty: Optional[str] = "medium"
+    language: Optional[str] = "fr"
+    context: Optional[Dict[str, Any]] = None
 
 class ExerciseResponse(BaseModel):
-    exercise_text: str
+    exercise_id: str
+    title: str
+    description: str
+    instructions: str
+    content: str
 
-# --- Routes existantes ---
-@router.post("/init")
-async def init_session(
-    user_id: str,
-    language: Optional[str] = "français",
-    goal: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+@router.get("/init")
+async def init_coaching(
+    user_id: str = Query(..., description="ID de l'utilisateur"),
+    db: AsyncSession = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id)
 ):
     """
     Initialise une session de coaching.
-    Équivalent à POST /coaching/init dans le backend Node.js.
     """
+    # Vérifier que l'utilisateur est autorisé
+    if not check_user_access(user_id, current_user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vous n'êtes pas autorisé à initialiser une session pour cet utilisateur"
+        )
+    
     try:
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id est requis")
+        # Créer une nouvelle session
+        session_id = uuid.uuid4()
         
-        # Créer une nouvelle session dans la base de données
-        session_uuid = uuid.uuid4()
-        session_id = str(session_uuid)
-        
-        # Initialiser la session avec l'orchestrateur
-        session_state = await orchestrator.get_or_create_session(
-            session_id_str=session_id,
-            db=db,
+        # Créer la session dans la base de données
+        db_session = CoachingSession(
+            id=session_id,
             user_id=user_id,
-            language=language,
-            goal=goal
+            language="fr"
         )
         
-        # Générer un message initial
-        initial_prompt = f"Tu es un coach de prononciation français. L'utilisateur souhaite améliorer sa prononciation en {language}. Son objectif est: {goal or 'améliorer sa prononciation générale'}. Commence la session en te présentant brièvement et propose un premier exercice."
+        # Créer un participant (l'utilisateur)
+        participant = Participant(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            name="Utilisateur",
+            role="user",
+            is_primary=True
+        )
         
-        # Générer la réponse initiale
-        response = await orchestrator.generate_text_response(session_id, initial_prompt, db)
+        # Ajouter à la base de données
+        db.add(db_session)
+        db.add(participant)
+        await db.commit()
         
         return {
             "status": "success",
             "message": "Session de coaching initialisée",
             "data": {
-                "session_id": session_id,
-                "coach_message": response["text_response"],
-                "websocket_url": f"/ws/{session_id}"  # URL pour la connexion WebSocket
+                "session_id": str(session_id)
             }
         }
     except Exception as e:
-        logger.error(f"Erreur lors de l'initialisation de la session: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur lors de l'initialisation de la session: {str(e)}")
-
-@router.post("/message", tags=["Coaching"])
-async def process_message(
-    session_id: str,
-    message: str,
-    audio_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Traite un message dans une session existante.
-    Équivalent à POST /coaching/message dans le backend Node.js.
-    """
-    try:
-        if not session_id or not message:
-            raise HTTPException(status_code=400, detail="session_id et message sont requis")
-        
-        # Vérifier que la session existe
-        try:
-            # Convertir l'ID de session en UUID
-            session_uuid = uuid.UUID(session_id)
-            session_result = await db.execute(select(CoachingSession).where(CoachingSession.id == session_uuid))
-            session = session_result.scalar_one_or_none()
-            if not session:
-                raise HTTPException(status_code=404, detail="Session non trouvée")
-        except ValueError:
-            # Si l'ID de session n'est pas un UUID valide
-            logger.error(f"ID de session invalide: {session_id}")
-            raise HTTPException(status_code=400, detail="ID de session invalide")
-        
-        # Version simplifiée sans opérations de base de données
-        logger.info(f"Message reçu pour la session {session_id}: {message}")
-        
-        # Utiliser une réponse statique
-        response = {
-            "text_response": "Bonjour ! Je suis ravi de vous aider avec votre prononciation. Comment puis-je vous assister aujourd'hui ?",
-            "emotion_label": "neutre"
-        }
-        
-        logger.info(f"Réponse statique générée pour la session {session_id}")
-        
-        return {
-            "status": "success",
-            "message": "Message traité",
-            "data": {
-                "coach_message": response["text_response"]
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Erreur lors du traitement du message: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur lors du traitement du message: {str(e)}")
-
-@router.post("/interrupt", tags=["Coaching"])
-async def interrupt_session(
-    session_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Interrompt une session de coaching.
-    Équivalent à POST /coaching/interrupt dans le backend Node.js.
-    """
-    try:
-        if not session_id:
-            raise HTTPException(status_code=400, detail="session_id est requis")
-        
-        # Vérifier que la session existe
-        try:
-            # Convertir l'ID de session en UUID
-            session_uuid = uuid.UUID(session_id)
-            session_result = await db.execute(select(CoachingSession).where(CoachingSession.id == session_uuid))
-            session = session_result.scalar_one_or_none()
-            if not session:
-                raise HTTPException(status_code=404, detail="Session non trouvée")
-        except ValueError:
-            # Si l'ID de session n'est pas un UUID valide
-            logger.error(f"ID de session invalide: {session_id}")
-            raise HTTPException(status_code=400, detail="ID de session invalide")
-        
-        # Interrompre la session via l'orchestrateur
-        await orchestrator.handle_interruption(session_id)
-        
-        return {
-            "status": "success",
-            "message": "Session interrompue",
-            "data": {
-                "session_id": session_id,
-                "paused": True
-            }
-        }
-    except Exception as e:
-        logger.error(f"Erreur lors de l'interruption de la session: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur lors de l'interruption de la session: {str(e)}")
-
-@router.post("/end", tags=["Coaching"])
-async def end_session(
-    session_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Termine une session de coaching.
-    Équivalent à POST /coaching/end dans le backend Node.js.
-    """
-    try:
-        if not session_id:
-            raise HTTPException(status_code=400, detail="session_id est requis")
-        
-        # Vérifier que la session existe
-        try:
-            # Convertir l'ID de session en UUID
-            session_uuid = uuid.UUID(session_id)
-            session_result = await db.execute(select(CoachingSession).where(CoachingSession.id == session_uuid))
-            session = session_result.scalar_one_or_none()
-            if not session:
-                raise HTTPException(status_code=404, detail="Session non trouvée")
-        except ValueError:
-            # Si l'ID de session n'est pas un UUID valide
-            logger.error(f"ID de session invalide: {session_id}")
-            raise HTTPException(status_code=400, detail="ID de session invalide")
-        
-        # Récupérer tous les tours de la session
-        turns_result = await db.execute(
-            select(SessionTurn)
-            .where(SessionTurn.session_id == session_uuid)
-            .order_by(SessionTurn.turn_number)
+        logger.error(f"Erreur lors de l'initialisation de la session de coaching: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de l'initialisation de la session de coaching: {str(e)}"
         )
-        turns = turns_result.scalars().all()
-        
-        # Construire l'historique complet
-        history_text = "\n".join([f"{'Utilisateur' if turn.role == 'user' else 'Coach'}: {turn.text_content}" for turn in turns])
-        
-        # Générer un résumé de la session
-        prompt = f"Tu es un coach de prononciation français. Voici l'historique complet d'une session de coaching:\n{history_text}\n\nFais un résumé des points forts et des points à améliorer de l'utilisateur, ainsi que des recommandations pour continuer à progresser. Limite ta réponse à 5-6 phrases."
-        
-        # Générer le résumé
-        response = await orchestrator.generate_text_response(session_id, prompt, db)
-        
-        # Marquer la session comme terminée
-        session.status = "ended"
-        session.ended_at = datetime.datetime.utcnow()
-        await db.commit()
-        
-        # Nettoyer la session dans l'orchestrateur
-        await orchestrator.cleanup_session(session_id, db)
-        
-        return {
-            "status": "success",
-            "message": "Session terminée",
-            "data": {
-                "summary": response["text_response"]
-            }
-        }
-    except Exception as e:
-        logger.error(f"Erreur lors de la fin de la session: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur lors de la fin de la session: {str(e)}")
 
-# --- Nouvelle route pour la génération d'exercices ---
 @router.post("/exercise/generate", response_model=ExerciseResponse)
-async def generate_exercise_text_endpoint(
-    request_data: ExerciseRequest
+async def generate_exercise(
+    request: ExerciseRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id)
 ):
     """
-    Génère le texte pour un exercice de coaching spécifique en utilisant l'IA.
+    Génère un exercice de coaching.
     """
     try:
-        logger.info(f"Requête API pour générer un exercice: {request_data.dict()}")
+        # Initialiser le service LLM
+        try:
+            llm_service = LlmServiceLocal()
+            logger.info("Utilisation du service LLM local")
+        except Exception as e:
+            logger.warning(f"Service LLM local non disponible: {e}. Utilisation du service distant.")
+            llm_service = LlmService()
         
-        # Appeler la méthode de l'orchestrateur
-        exercise_text = await orchestrator.generate_exercise(
-            exercise_type=request_data.exercise_type,
-            topic=request_data.topic,
-            difficulty=request_data.difficulty,
-            length=request_data.length
+        # Construire le prompt pour générer l'exercice
+        prompt = f"""
+        Génère un exercice de {request.exercise_type} en français de niveau {request.difficulty}.
+        L'exercice doit inclure:
+        1. Un titre
+        2. Une brève description
+        3. Des instructions claires
+        4. Le contenu de l'exercice (texte à prononcer, questions, etc.)
+        
+        Format de réponse:
+        {{
+            "title": "Titre de l'exercice",
+            "description": "Description de l'exercice",
+            "instructions": "Instructions détaillées",
+            "content": "Contenu de l'exercice"
+        }}
+        """
+        
+        # Générer l'exercice
+        result = await llm_service.generate(
+            prompt=prompt,
+            context=request.context or {}
         )
         
-        return ExerciseResponse(exercise_text=exercise_text)
+        # Extraire la réponse
+        response_text = result.get("text", "")
         
+        # Essayer de parser la réponse comme JSON
+        try:
+            # Trouver le début et la fin du JSON dans la réponse
+            start_idx = response_text.find("{")
+            end_idx = response_text.rfind("}") + 1
+            
+            if start_idx >= 0 and end_idx > start_idx:
+                json_str = response_text[start_idx:end_idx]
+                exercise_data = json.loads(json_str)
+            else:
+                # Fallback si le format JSON n'est pas trouvé
+                exercise_data = {
+                    "title": "Exercice de " + request.exercise_type,
+                    "description": "Exercice généré automatiquement",
+                    "instructions": "Suivez les instructions ci-dessous",
+                    "content": response_text
+                }
+        except json.JSONDecodeError:
+            # Fallback si le parsing JSON échoue
+            exercise_data = {
+                "title": "Exercice de " + request.exercise_type,
+                "description": "Exercice généré automatiquement",
+                "instructions": "Suivez les instructions ci-dessous",
+                "content": response_text
+            }
+        
+        # Générer un ID pour l'exercice
+        exercise_id = f"exercise-{uuid.uuid4()}"
+        
+        return ExerciseResponse(
+            exercise_id=exercise_id,
+            title=exercise_data.get("title", "Exercice de " + request.exercise_type),
+            description=exercise_data.get("description", "Exercice généré automatiquement"),
+            instructions=exercise_data.get("instructions", "Suivez les instructions ci-dessous"),
+            content=exercise_data.get("content", response_text)
+        )
     except Exception as e:
-        logger.error(f"Erreur API lors de la génération de l'exercice: {e}", exc_info=True)
-        # Remonter une erreur HTTP 500
-        raise HTTPException(status_code=500, detail=f"Erreur interne lors de la génération de l'exercice: {str(e)}")
+        logger.error(f"Erreur lors de la génération de l'exercice: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de la génération de l'exercice: {str(e)}"
+        )
