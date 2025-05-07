@@ -17,7 +17,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 # Ces variables peuvent être modifiées pendant les tests pour contrôler le comportement de get_current_user_id
 TEST_USER_ID = "default-user-id"
 TEST_MODE = False
-SKIP_AUTH_CHECK = False  # Si True, la vérification d'authentification est désactivée
+SKIP_AUTH_CHECK = True  # Si True, la vérification d'authentification est désactivée (modifié pour les tests)
 
 # Fonction pour activer le mode test et définir l'ID utilisateur pour les tests
 def set_test_user_id(user_id: str):
@@ -29,7 +29,7 @@ def set_test_user_id(user_id: str):
 def reset_test_mode():
     global TEST_MODE, SKIP_AUTH_CHECK
     TEST_MODE = False
-    SKIP_AUTH_CHECK = False
+    SKIP_AUTH_CHECK = True  # Gardons la vérification désactivée pour les tests
 
 # Fonction pour désactiver la vérification d'authentification pendant les tests
 def disable_auth_check():

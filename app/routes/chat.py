@@ -5,13 +5,12 @@ Routes pour le service de chat.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from core.auth import get_current_user_id
 from services.llm_service import LlmService
-from services.llm_service_local import LlmServiceLocal
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ class ChatRequest(BaseModel):
     message: str
     context: Optional[str] = None
     session_id: Optional[str] = None
-    history: Optional[list] = None
+    history: Optional[List[Dict[str, str]]] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -39,26 +38,32 @@ async def chat(
     """
     try:
         # Initialiser le service LLM
-        # Utiliser le service local si disponible, sinon utiliser le service distant
-        try:
-            llm_service = LlmServiceLocal()
-            logger.info("Utilisation du service LLM local")
-        except Exception as e:
-            logger.warning(f"Service LLM local non disponible: {e}. Utilisation du service distant.")
-            llm_service = LlmService()
+        llm_service = LlmService()
+        logger.info("Utilisation du service LLM")
         
-        # Préparer le contexte pour le LLM
-        context = {
-            "user_id": current_user_id,
-            "session_id": request.session_id,
-            "context_type": request.context or "general",
-            "history": request.history or []
-        }
+        # Préparer l'historique pour le LLM
+        history = request.history or []
+        
+        # Si l'historique est vide, créer un message utilisateur
+        if not history:
+            history = [{"role": "user", "content": request.message}]
+        # Si le dernier message n'est pas celui de l'utilisateur, l'ajouter
+        elif history[-1]["role"] != "user" or history[-1]["content"] != request.message:
+            history.append({"role": "user", "content": request.message})
+        
+        # Préparer le contexte du scénario
+        scenario_context = None
+        if request.context:
+            scenario_context = {
+                "name": request.context,
+                "goal": "conversation",
+                "current_step": "dialogue"
+            }
         
         # Générer la réponse
         result = await llm_service.generate(
-            prompt=request.message,
-            context=context
+            history=history,
+            scenario_context=scenario_context
         )
         
         # Extraire la réponse et l'émotion
