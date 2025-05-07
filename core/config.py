@@ -10,8 +10,8 @@ load_dotenv()
 class Settings(BaseSettings):
     # Paramètres de l'application
     DEBUG: bool = False
-    HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    HOST: str = "127.0.0.1"  # Modifié de "0.0.0.0" à "127.0.0.1" pour éviter les conflits
+    PORT: int = 8083  # Port par défaut
     LOG_LEVEL: str = "info"
     LOG_DIR: str = "./logs"
     SECRET_KEY: str = "eloquence_secret_key_change_in_production"
@@ -35,7 +35,18 @@ class Settings(BaseSettings):
         if not SUPABASE_PROJECT_REF or not SUPABASE_DB_PASSWORD:
             raise ValueError("SUPABASE_PROJECT_REF and SUPABASE_DB_PASSWORD must be set in .env or environment variables")
         
-        DATABASE_URL: str = f"postgresql+asyncpg://postgres.{SUPABASE_PROJECT_REF}:{SUPABASE_DB_PASSWORD}@aws-0-{SUPABASE_REGION}.pooler.supabase.com:6543/postgres?prepared_statement_cache_size=0"
+        # Ajouter des options supplémentaires à la chaîne de connexion pour éviter les problèmes avec pgbouncer
+        DATABASE_URL: str = (
+            f"postgresql+asyncpg://postgres.{SUPABASE_PROJECT_REF}:{SUPABASE_DB_PASSWORD}@"
+            f"aws-0-{SUPABASE_REGION}.pooler.supabase.com:6543/postgres"
+            f"?prepared_statement_cache_size=0"
+            f"&statement_cache_size=0"
+            f"&pool_pre_ping=true"
+            f"&pool_recycle=300"
+            f"&pool_timeout=30"
+            f"&pool_size=5"
+            f"&max_overflow=10"
+        )
     
     # Redis
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
@@ -131,6 +142,7 @@ class Settings(BaseSettings):
         env_file_encoding = 'utf-8'
         extra = 'ignore' # Ignorer les variables d'env non définies dans le modèle
 
+# Créer une instance de Settings
 settings = Settings()
 
 # Optionnel: Charger des configurations supplémentaires depuis YAML

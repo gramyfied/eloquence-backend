@@ -12,13 +12,9 @@ from .asr_service import AsrService
 from .tts_service import TtsService
 from .kaldi_service import kaldi_service
 
-# Importer le service LLM approprié en fonction de la configuration
-if settings.LLM_BACKEND.lower() in ['vllm', 'tgi']:
-    logger.info(f"Utilisation du service LLM local avec backend {settings.LLM_BACKEND}")
-    from .llm_service_local import LlmService
-else:
-    logger.info("Utilisation du service LLM distant (API Azure)")
-    from .llm_service import LlmService
+# Importer le service LLM
+logger.info("Utilisation du service LLM unifié")
+from .llm_service import LlmService
 
 # Exporter les classes et instances
 __all__ = [

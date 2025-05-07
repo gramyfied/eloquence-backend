@@ -113,11 +113,32 @@ class LlmService:
         return messages
 
     @measure_latency(STEP_LLM_GENERATE)
-    async def generate(self, history: List[Dict[str, str]], is_interrupted: bool = False, scenario_context: Optional[Dict] = None) -> Dict[str, str]:
+    async def generate(self, history: List[Dict[str, str]] = None, is_interrupted: bool = False, scenario_context: Optional[Dict] = None, prompt: str = None, context: Dict = None) -> Dict[str, str]:
         """
         Génère une réponse du LLM de manière asynchrone.
+        Supporte deux interfaces:
+        1. Avec history, is_interrupted et scenario_context (interface originale)
+        2. Avec prompt et context (interface utilisée par les routes)
+        
         Retourne un dictionnaire avec 'text_response' et 'emotion_label'.
         """
+        # Si prompt et context sont fournis, convertir au format attendu par l'interface originale
+        if prompt is not None and history is None:
+            # Créer un historique à partir du prompt
+            history = [{"role": "user", "content": prompt}]
+            
+            # Extraire le contexte du scénario si disponible
+            if context:
+                scenario_context = {
+                    "name": context.get("context_type", "general"),
+                    "goal": "améliorer l'expression orale",
+                    "current_step": "conversation"
+                }
+                
+                # Si un historique est fourni dans le contexte, l'utiliser
+                if "history" in context and context["history"]:
+                    history = context["history"] + history
+        
         if self.backend == 'vllm':
             return await self._generate_vllm(history, is_interrupted, scenario_context)
         elif self.backend == 'tgi':
@@ -148,75 +169,46 @@ class LlmService:
             session = aiohttp.ClientSession(timeout=self.timeout)
             try:
                 # Faire la requête POST
-                response = await session.post(f"{self.api_url}/v1/chat/completions", headers=headers, json=payload)
-                try:
-                    response_status = response.status
-                    response_text = await response.text()  # Lire le texte pour le log en cas d'erreur
-
-                    if response_status == 200:
-                        response_data = json.loads(response_text)
-                        logger.debug(f"Réponse vLLM reçue: {json.dumps(response_data, indent=2)}")
-
-                        # Extraire la réponse selon le format de vLLM
-                        if response_data.get("choices") and len(response_data["choices"]) > 0:
-                            full_response = response_data["choices"][0].get("message", {}).get("content", "")
-
-                            # Extraire l'émotion et le texte de la réponse
-                            text_response = full_response
-                            emotion_label = "neutre"  # Défaut
-
-                            lines = full_response.strip().split('\n')
-                            last_line = lines[-1].strip()
-                            if last_line.startswith("[EMOTION:") and last_line.endswith("]"):
-                                try:
-                                    extracted_emotion = last_line.split(":")[1].strip()[:-1].lower()
-                                    if extracted_emotion in TARGET_EMOTIONS:
-                                        emotion_label = extracted_emotion
-                                        # Retirer la ligne d'émotion du texte principal
-                                        text_response = "\n".join(lines[:-1]).strip()
-                                    else:
-                                        logger.warning(f"Émotion extraite '{extracted_emotion}' non valide. Utilisation de 'neutre'.")
-                                except Exception:
-                                    logger.warning(f"Impossible d'extraire l'émotion de '{last_line}'. Utilisation de 'neutre'.")
-
-                            if not text_response:  # Si le LLM n'a retourné que l'émotion
-                                text_response = "..."  # Fournir un texte minimal
-
-                            return {"text_response": text_response, "emotion_label": emotion_label}
-                        else:
-                            logger.error(f"Réponse vLLM invalide (manque choices): {response_text}")
-                            raise ValueError("Format de réponse vLLM invalide")
+                async with session.post(self.api_url, json=payload, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Erreur vLLM {response.status}: {error_text}")
+                        return {"text": f"Erreur du service LLM: {response.status}", "emotion": "neutre"}
+                    
+                    # Traiter la réponse
+                    response_json = await response.json()
+                    
+                    # Extraire le texte de la réponse
+                    if "choices" in response_json and len(response_json["choices"]) > 0:
+                        content = response_json["choices"][0]["message"]["content"]
                     else:
-                        logger.error(f"Erreur API vLLM ({response_status}): {response_text}")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response_status,
-                            message=f"Erreur API vLLM: {response_text}",
-                            headers=response.headers
-                        )
-                finally:
-                    # Fermer la réponse
-                    response.close()
+                        logger.error(f"Format de réponse vLLM inattendu: {response_json}")
+                        return {"text": "Erreur: format de réponse inattendu", "emotion": "neutre"}
+                    
+                    # Extraire l'émotion du texte
+                    emotion = "neutre"  # Valeur par défaut
+                    for target_emotion in TARGET_EMOTIONS:
+                        if f"[EMOTION: {target_emotion}]" in content:
+                            emotion = target_emotion
+                            # Supprimer le tag d'émotion du texte
+                            content = content.replace(f"[EMOTION: {target_emotion}]", "").strip()
+                            break
+                    
+                    return {"text": content, "emotion": emotion}
             finally:
-                # Fermer la session
                 await session.close()
-
         except asyncio.TimeoutError:
-            logger.error(f"Timeout lors de l'appel à l'API vLLM ({settings.LLM_TIMEOUT_S}s)")
-            raise TimeoutError("Timeout API vLLM")
-        except aiohttp.ClientError as e:
-            logger.error(f"Erreur client HTTP lors de l'appel vLLM: {e}", exc_info=True)
-            raise ConnectionError(f"Erreur de connexion API vLLM: {e}")
+            logger.error(f"Timeout lors de la requête vLLM après {self.timeout.total} secondes")
+            return {"text": "Désolé, le service LLM a mis trop de temps à répondre.", "emotion": "neutre"}
         except Exception as e:
-            logger.error(f"Erreur inattendue lors de la génération vLLM: {e}", exc_info=True)
-            raise RuntimeError(f"Erreur vLLM: {e}")
+            logger.error(f"Erreur lors de la génération vLLM: {e}")
+            return {"text": f"Erreur du service LLM: {str(e)}", "emotion": "neutre"}
 
     async def _generate_tgi(self, history: List[Dict[str, str]], is_interrupted: bool = False, scenario_context: Optional[Dict] = None) -> Dict[str, str]:
         """
         Génère une réponse en utilisant TGI (Text Generation Inference).
         """
-        # Pour TGI, nous utilisons le prompt textuel plutôt que les messages
+        # Construire le prompt au format texte (TGI n'utilise pas le format de messages)
         prompt = self._build_prompt(history, is_interrupted, scenario_context)
         
         headers = {'Content-Type': 'application/json'}
@@ -226,7 +218,8 @@ class LlmService:
                 "temperature": self.temperature,
                 "max_new_tokens": self.max_tokens,
                 "do_sample": True,
-                "return_full_text": False
+                "top_p": 0.9,
+                "top_k": 50
             }
         }
 
@@ -237,65 +230,40 @@ class LlmService:
             session = aiohttp.ClientSession(timeout=self.timeout)
             try:
                 # Faire la requête POST
-                response = await session.post(f"{self.api_url}/generate", headers=headers, json=payload)
-                try:
-                    response_status = response.status
-                    response_text = await response.text()  # Lire le texte pour le log en cas d'erreur
-
-                    if response_status == 200:
-                        response_data = json.loads(response_text)
-                        logger.debug(f"Réponse TGI reçue: {json.dumps(response_data, indent=2)}")
-
-                        # Extraire la réponse selon le format de TGI
-                        if isinstance(response_data, list) and len(response_data) > 0:
-                            full_response = response_data[0].get("generated_text", "")
-                        else:
-                            full_response = response_data.get("generated_text", "")
-
-                        # Extraire l'émotion et le texte de la réponse
-                        text_response = full_response
-                        emotion_label = "neutre"  # Défaut
-
-                        lines = full_response.strip().split('\n')
-                        last_line = lines[-1].strip()
-                        if last_line.startswith("[EMOTION:") and last_line.endswith("]"):
-                            try:
-                                extracted_emotion = last_line.split(":")[1].strip()[:-1].lower()
-                                if extracted_emotion in TARGET_EMOTIONS:
-                                    emotion_label = extracted_emotion
-                                    # Retirer la ligne d'émotion du texte principal
-                                    text_response = "\n".join(lines[:-1]).strip()
-                                else:
-                                    logger.warning(f"Émotion extraite '{extracted_emotion}' non valide. Utilisation de 'neutre'.")
-                            except Exception:
-                                logger.warning(f"Impossible d'extraire l'émotion de '{last_line}'. Utilisation de 'neutre'.")
-
-                        if not text_response:  # Si le LLM n'a retourné que l'émotion
-                            text_response = "..."  # Fournir un texte minimal
-
-                        return {"text_response": text_response, "emotion_label": emotion_label}
+                async with session.post(self.api_url, json=payload, headers=headers) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Erreur TGI {response.status}: {error_text}")
+                        return {"text": f"Erreur du service LLM: {response.status}", "emotion": "neutre"}
+                    
+                    # Traiter la réponse
+                    response_json = await response.json()
+                    
+                    # Extraire le texte de la réponse
+                    if isinstance(response_json, list) and len(response_json) > 0 and "generated_text" in response_json[0]:
+                        content = response_json[0]["generated_text"]
+                        # Supprimer le prompt de la réponse
+                        if content.startswith(prompt):
+                            content = content[len(prompt):].strip()
                     else:
-                        logger.error(f"Erreur API TGI ({response_status}): {response_text}")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response_status,
-                            message=f"Erreur API TGI: {response_text}",
-                            headers=response.headers
-                        )
-                finally:
-                    # Fermer la réponse
-                    response.close()
+                        logger.error(f"Format de réponse TGI inattendu: {response_json}")
+                        return {"text": "Erreur: format de réponse inattendu", "emotion": "neutre"}
+                    
+                    # Extraire l'émotion du texte
+                    emotion = "neutre"  # Valeur par défaut
+                    for target_emotion in TARGET_EMOTIONS:
+                        if f"[EMOTION: {target_emotion}]" in content:
+                            emotion = target_emotion
+                            # Supprimer le tag d'émotion du texte
+                            content = content.replace(f"[EMOTION: {target_emotion}]", "").strip()
+                            break
+                    
+                    return {"text": content, "emotion": emotion}
             finally:
-                # Fermer la session
                 await session.close()
-
         except asyncio.TimeoutError:
-            logger.error(f"Timeout lors de l'appel à l'API TGI ({settings.LLM_TIMEOUT_S}s)")
-            raise TimeoutError("Timeout API TGI")
-        except aiohttp.ClientError as e:
-            logger.error(f"Erreur client HTTP lors de l'appel TGI: {e}", exc_info=True)
-            raise ConnectionError(f"Erreur de connexion API TGI: {e}")
+            logger.error(f"Timeout lors de la requête TGI après {self.timeout.total} secondes")
+            return {"text": "Désolé, le service LLM a mis trop de temps à répondre.", "emotion": "neutre"}
         except Exception as e:
-            logger.error(f"Erreur inattendue lors de la génération TGI: {e}", exc_info=True)
-            raise RuntimeError(f"Erreur TGI: {e}")
+            logger.error(f"Erreur lors de la génération TGI: {e}")
+            return {"text": f"Erreur du service LLM: {str(e)}", "emotion": "neutre"}

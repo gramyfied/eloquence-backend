@@ -15,6 +15,7 @@ from app.routes.audio import router as audio_router
 from app.routes.chat import router as chat_router
 from app.routes.coaching import router as coaching_router
 from app.routes.monitoring import router as monitoring_router
+from app.routes.scenarios import router as scenarios_router
 
 from core.config import settings
 from core.database import init_db
@@ -52,6 +53,7 @@ app.include_router(audio_router, prefix="/api")
 app.include_router(chat_router, prefix="/chat")
 app.include_router(coaching_router, prefix="/coaching")
 app.include_router(monitoring_router, prefix="/api")
+app.include_router(scenarios_router, prefix="/api/scenarios")
 
 # Servir les fichiers statiques
 app.mount("/audio", StaticFiles(directory=settings.AUDIO_STORAGE_PATH), name="audio")
@@ -98,6 +100,18 @@ async def health_check():
         "version": "1.0.0",
         "mode": "test" if settings.IS_TESTING else "production"
     }
+
+# Redirection pour /chat vers /chat/
+@app.get("/chat")
+async def redirect_chat():
+    """
+    Redirection de /chat vers /chat/ pour éviter l'erreur 307.
+    """
+    return JSONResponse(
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        headers={"Location": "/chat/"},
+        content={"detail": "Redirection vers /chat/"}
+    )
 
 # Route racine
 @app.get("/")
@@ -153,6 +167,7 @@ async def root():
                     <li><a href="/api/stt">/api/stt</a> - Reconnaissance vocale</li>
                     <li><a href="/chat/">/chat/</a> - Chat avec l'assistant</li>
                     <li><a href="/coaching/exercise/generate">/coaching/exercise/generate</a> - Générer un exercice</li>
+                    <li><a href="/api/scenarios">/api/scenarios</a> - Liste des scénarios disponibles</li>
                 </ul>
             </div>
         </body>
