@@ -31,7 +31,11 @@ class TTSServiceOptimized:
     
     def __init__(self):
         """Initialise le service TTS optimisé."""
-        self.api_url = settings.TTS_API_URL.rstrip('/') + "/api/tts"  # Assurer le bon endpoint
+        # Éviter la duplication de /api/tts dans l'URL
+        if settings.TTS_API_URL.endswith('/api/tts'):
+            self.api_url = settings.TTS_API_URL
+        else:
+            self.api_url = settings.TTS_API_URL.rstrip('/') + "/api/tts"
         self.timeout = ClientTimeout(total=60)  # Timeout généreux pour TTS
         self.emotion_to_speaker_id: Dict[str, Optional[str]] = {
             "neutre": settings.TTS_SPEAKER_ID_NEUTRAL,

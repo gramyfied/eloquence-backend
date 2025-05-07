@@ -6,7 +6,9 @@ Point d'entrée principal de l'application Eloquence Backend (mode sans base de 
 import logging
 import time
 import os
+import uuid
 from fastapi import FastAPI, Query, HTTPException, status
+from core.config import settings
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -200,13 +202,39 @@ async def mock_exercise_generate():
 # Endpoints API TTS et STT avec paramètres
 @app.post("/api/tts")
 async def mock_tts_with_params(text: str = Query(...)):
-    # Endpoint simulé pour la synthèse vocale
-    return {
-        "status": "mock",
-        "text": text,
-        "audio_id": "mock-audio-" + str(int(time.time())),
-        "message": "Synthèse vocale simulée en mode sans base de données"
-    }
+    try:
+        # Importer le service TTS optimisé
+        from services.tts_service_optimized import tts_service_optimized
+        
+        # Utiliser le service TTS optimisé pour synthétiser
+        audio_data = await tts_service_optimized.synthesize_text(text)
+        
+        # Générer un nom de fichier unique pour stocker l'audio
+        filename = f"tts-{uuid.uuid4()}.wav"
+        file_path = os.path.join(settings.AUDIO_STORAGE_PATH, filename)
+        
+        # Sauvegarder le fichier audio
+        if audio_data:
+            with open(file_path, "wb") as f:
+                f.write(audio_data)
+            
+            return {
+                "status": "success",
+                "text": text,
+                "audio_id": file_path,
+                "message": "Synthèse vocale réussie"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Échec de la synthèse vocale"
+            }
+    except Exception as e:
+        logger.error(f"Erreur lors de la synthèse vocale: {e}")
+        return {
+            "status": "error",
+            "message": f"Erreur lors de la synthèse vocale: {str(e)}"
+        }
 
 @app.post("/api/stt")
 async def mock_stt_with_params(audio_id: str = Query(...)):
@@ -220,18 +248,28 @@ async def mock_stt_with_params(audio_id: str = Query(...)):
 
 # Endpoint de monitoring
 @app.get("/api/monitoring/latency")
-async def mock_monitoring_latency():
-    # Endpoint simulé pour le monitoring de latence
-    return {
-        "status": "mock",
-        "latency": {
-            "tts": 150,
-            "stt": 200,
-            "llm": 300,
-            "total": 650
-        },
-        "message": "Latence simulée en mode sans base de données"
-    }
+async def monitoring_latency():
+    try:
+        # Importer le module de monitoring de latence
+        from core.latency_monitor import get_latency_stats
+        
+        # Récupérer les statistiques de latence réelles
+        stats = get_latency_stats()
+        
+        return stats
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des statistiques de latence: {e}")
+        # Retourner des données simulées en cas d'erreur
+        return {
+            "status": "error",
+            "message": f"Erreur lors de la récupération des statistiques de latence: {str(e)}",
+            "fallback_data": {
+                "tts": 150,
+                "stt": 200,
+                "llm": 300,
+                "total": 650
+            }
+        }
 
 if __name__ == "__main__":
     import uvicorn

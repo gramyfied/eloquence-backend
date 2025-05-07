@@ -30,7 +30,7 @@ from core.latency_monitor import (
 from services.vad_service import VadService
 from services.asr_service import AsrService
 from services.llm_service import LlmService
-from services.tts_service import TtsService
+from services.tts_service_optimized import tts_service_optimized
 from services.kaldi_service import kaldi_service # Importer l'instance du service
 # Importer le manager ici car l'orchestrateur peut le faire sans cycle
 from app.websocket import manager as websocket_manager
@@ -166,7 +166,7 @@ class Orchestrator:
         self.vad_service = VadService()
         self.asr_service = AsrService()
         self.llm_service = LlmService()
-        self.tts_service = TtsService()
+        self.tts_service = tts_service_optimized
         self.kaldi_service = kaldi_service # Utiliser l'instance importée
         logger.info("Orchestrator initialisé.")
 
@@ -675,6 +675,7 @@ class Orchestrator:
             async with AsyncLatencyContext(STEP_TTS_SYNTHESIZE, session_id):
                 session.current_tts_task = asyncio.create_task(
                     self.tts_service.stream_synthesize(
+                        websocket_manager=websocket_manager,
                         session_id=session_id,
                         text=llm_response["text_response"],
                         emotion=llm_response["emotion_label"],
@@ -776,6 +777,7 @@ class Orchestrator:
             # la relance douce, handle_interruption ne l'arrêtera pas directement.
             # C'est un compromis pour la simplicité.
             await self.tts_service.stream_synthesize(
+                websocket_manager=websocket_manager,
                 session_id=session_id,
                 text=llm_response["text_response"],
                 emotion=llm_response["emotion_label"], # Utiliser l'émotion suggérée

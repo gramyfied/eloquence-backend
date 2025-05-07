@@ -12,7 +12,6 @@ from core.latency_monitor import (
 )
 
 router = APIRouter(
-    prefix="/monitoring",
     tags=["monitoring"],
     responses={404: {"description": "Not found"}},
 )

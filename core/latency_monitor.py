@@ -127,14 +127,40 @@ class LatencyStats:
             "sessions": {}
         }
         
+        # Copier les données sous le verrou pour minimiser le temps de blocage
         with self.lock:
-            # Statistiques globales
-            for step in self.measurements:
-                result["global"][step] = self.get_stats(step)
+            steps = list(self.measurements.keys())
+            session_ids = list(self.session_measurements.keys())
+        
+        # Calculer les statistiques globales sans bloquer
+        for step in steps:
+            with self.lock:
+                # Prendre un snapshot des mesures pour ce step
+                values = self.measurements.get(step, [])[:]
             
-            # Statistiques par session
-            for session_id in self.session_measurements:
-                result["sessions"][session_id] = self.get_session_stats(session_id)
+            # Calculer les statistiques sur le snapshot
+            if not values:
+                result["global"][step] = {"count": 0, "min": 0, "max": 0, "mean": 0, "median": 0, "p95": 0, "p99": 0}
+                continue
+                
+            result["global"][step] = {
+                "count": len(values),
+                "min": min(values),
+                "max": max(values),
+                "mean": statistics.mean(values),
+                "median": statistics.median(values),
+                "p95": statistics.quantiles(values, n=20)[18] if len(values) >= 20 else max(values),
+                "p99": statistics.quantiles(values, n=100)[98] if len(values) >= 100 else max(values)
+            }
+        
+        # Limiter le nombre de sessions pour éviter un timeout
+        max_sessions = 10
+        if len(session_ids) > max_sessions:
+            session_ids = session_ids[:max_sessions]
+            
+        # Calculer les statistiques par session
+        for session_id in session_ids:
+            result["sessions"][session_id] = self.get_session_stats(session_id)
         
         return result
     

@@ -10,7 +10,7 @@ import shutil
 from core.database import get_db
 from core.config import settings
 from services.asr_service import AsrService
-from services.tts_service import TtsService
+from services.tts_service_optimized import tts_service_optimized
 from services.kaldi_service import kaldi_service
 from core.orchestrator import orchestrator
 
@@ -19,7 +19,7 @@ router = APIRouter()
 
 # Initialiser les services
 asr_service = AsrService()
-tts_service = TtsService()
+tts_service = tts_service_optimized
 
 # Assurer que les répertoires de stockage existent
 os.makedirs(settings.AUDIO_STORAGE_PATH, exist_ok=True)
@@ -75,8 +75,24 @@ async def synthesize_speech(
             logger.warning(f"Texte trop long ({len(text)} caractères), tronqué à 2000 caractères")
             text = text[:2000] + "..."
         
-        # Utiliser le service TTS pour synthétiser
-        result = await tts_service.synthesize(text, voice=voice, speed=speed)
+        # Utiliser le service TTS optimisé pour synthétiser
+        audio_data = await tts_service.synthesize_text(text, voice_id=voice)
+        
+        # Générer un nom de fichier unique pour stocker l'audio
+        filename = f"tts-{uuid.uuid4()}.wav"
+        file_path = os.path.join(settings.AUDIO_STORAGE_PATH, filename)
+        
+        # Sauvegarder le fichier audio
+        if audio_data:
+            with open(file_path, "wb") as f:
+                f.write(audio_data)
+            
+            result = {
+                "file_path": file_path,
+                "size": len(audio_data)
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Échec de la synthèse vocale")
         
         return {
             "status": "success",
