@@ -5,6 +5,7 @@ Cette documentation détaille tous les endpoints de l'API Eloquence, avec des ex
 ## Table des matières
 
 1. [Configuration](#configuration)
+8. [Endpoints de scénarios](#endpoints-de-scénarios)
 2. [Authentification](#authentification)
 3. [Endpoints de santé](#endpoints-de-santé)
 4. [Endpoints de chat](#endpoints-de-chat)
@@ -423,6 +424,207 @@ Future<Map<String, dynamic>> endSession(String sessionId) async {
   );
   
   if (response.statusCode == 200) {
+## Endpoints de scénarios
+
+### Lister les scénarios disponibles
+
+**Endpoint:** `GET /api/scenarios`
+
+**Paramètres:**
+- `type`: (Optionnel) Type de scénario (entretien, présentation, etc.)
+- `difficulty`: (Optionnel) Niveau de difficulté (easy, medium, hard)
+- `language`: (Optionnel) Langue du scénario (défaut: "fr")
+
+```dart
+Future<List<Map<String, dynamic>>> listScenarios({
+  String? type,
+  String? difficulty,
+  String language = 'fr',
+}) async {
+  // Construire l'URL avec les paramètres de requête
+  String url = '$baseUrl/api/scenarios';
+  List<String> queryParams = [];
+  
+  if (type != null) queryParams.add('type=$type');
+  if (difficulty != null) queryParams.add('difficulty=$difficulty');
+  if (language != null) queryParams.add('language=$language');
+  
+  if (queryParams.isNotEmpty) {
+    url += '?' + queryParams.join('&');
+  }
+  
+  final response = await http.get(
+    Uri.parse(url),
+    headers: headers,
+  );
+  
+  if (response.statusCode == 200) {
+    final List<dynamic> data = jsonDecode(response.body);
+    return data.cast<Map<String, dynamic>>();
+  } else {
+    throw Exception('Échec de la récupération des scénarios: ${response.body}');
+  }
+}
+```
+
+**Exemple d'utilisation:**
+
+```dart
+try {
+  // Récupérer tous les scénarios d'entretien en français
+  final scenarios = await listScenarios(
+    type: 'entretien',
+    language: 'fr',
+  );
+  
+  // Afficher les scénarios disponibles
+  for (var scenario in scenarios) {
+    print("ID: ${scenario['id']}");
+    print("Nom: ${scenario['name']}");
+    print("Description: ${scenario['description']}");
+    print("Difficulté: ${scenario['difficulty']}");
+    print("---");
+  }
+} catch (e) {
+  print("Erreur: $e");
+}
+```
+
+### Récupérer un scénario spécifique
+
+**Endpoint:** `GET /api/scenarios/{scenario_id}`
+
+```dart
+Future<Map<String, dynamic>> getScenario(String scenarioId) async {
+  final response = await http.get(
+    Uri.parse('$baseUrl/api/scenarios/$scenarioId'),
+    headers: headers,
+  );
+  
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body);
+  } else {
+    throw Exception('Échec de la récupération du scénario: ${response.body}');
+  }
+}
+```
+
+**Exemple d'utilisation:**
+
+```dart
+try {
+  // Récupérer un scénario spécifique
+  final scenario = await getScenario('scenario_entretien_embauche');
+  
+  // Afficher les détails du scénario
+  print("Nom: ${scenario['name']}");
+  print("Description: ${scenario['description']}");
+  print("Type: ${scenario['type']}");
+  print("Difficulté: ${scenario['difficulty']}");
+  
+  // Accéder à la structure du scénario (étapes, personnages, etc.)
+  if (scenario.containsKey('structure')) {
+    final structure = scenario['structure'];
+    
+    // Afficher les étapes du scénario
+    if (structure.containsKey('steps')) {
+      print("\nÉtapes du scénario:");
+      for (var step in structure['steps']) {
+        print("- ${step['name']}: ${step['description']}");
+      }
+    }
+    
+    // Afficher les personnages du scénario
+    if (structure.containsKey('characters')) {
+      print("\nPersonnages:");
+      for (var character in structure['characters']) {
+        print("- ${character['name']}: ${character['role']}");
+      }
+    }
+  }
+  
+  // Afficher le prompt initial
+  if (scenario.containsKey('initial_prompt')) {
+    print("\nPrompt initial: ${scenario['initial_prompt']}");
+  }
+} catch (e) {
+  print("Erreur: $e");
+}
+```
+
+### Créer un nouveau scénario
+
+**Endpoint:** `POST /api/scenarios`
+
+```dart
+Future<String> createScenario(Map<String, dynamic> scenario) async {
+  final response = await http.post(
+    Uri.parse('$baseUrl/api/scenarios'),
+    headers: headers,
+    body: jsonEncode(scenario),
+  );
+  
+  if (response.statusCode == 201) {
+    final data = jsonDecode(response.body);
+    return data['id']; // Retourne l'ID du scénario créé
+  } else {
+    throw Exception('Échec de la création du scénario: ${response.body}');
+  }
+}
+```
+
+**Exemple d'utilisation:**
+
+```dart
+try {
+  // Créer un nouveau scénario
+  final scenarioId = await createScenario({
+    'name': 'Entretien technique',
+    'description': 'Simulation d\'un entretien technique pour un poste de développeur',
+    'type': 'entretien',
+    'difficulty': 'hard',
+    'language': 'fr',
+    'tags': ['technique', 'développement', 'informatique'],
+    'structure': {
+      'characters': [
+        {
+          'name': 'Recruteur',
+          'role': 'interviewer',
+          'description': 'Responsable technique expérimenté'
+        },
+        {
+          'name': 'Candidat',
+          'role': 'user',
+          'description': 'Développeur postulant pour un poste'
+        }
+      ],
+      'steps': [
+        {
+          'name': 'Introduction',
+          'description': 'Présentation et questions générales'
+        },
+        {
+          'name': 'Questions techniques',
+          'description': 'Questions sur les compétences techniques'
+        },
+        {
+          'name': 'Mise en situation',
+          'description': 'Résolution d\'un problème technique'
+        },
+        {
+          'name': 'Conclusion',
+          'description': 'Questions du candidat et fin de l\'entretien'
+        }
+      ]
+    },
+    'initial_prompt': 'Bonjour, je suis le responsable technique. Pouvez-vous vous présenter et me parler de votre expérience ?'
+  });
+  
+  print("Scénario créé avec l'ID: $scenarioId");
+} catch (e) {
+  print("Erreur: $e");
+}
+```
     return jsonDecode(response.body);
   } else {
     throw Exception('Échec de la terminaison de la session: ${response.body}');
@@ -468,6 +670,312 @@ class CoachingWebSocket {
   
   CoachingWebSocket(this.sessionId);
   
+### Exemple complet d'une session de coaching avec scénario
+
+```dart
+import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
+
+class ScenarioCoachingScreen extends StatefulWidget {
+  @override
+  _ScenarioCoachingScreenState createState() => _ScenarioCoachingScreenState();
+}
+
+class _ScenarioCoachingScreenState extends State<ScenarioCoachingScreen> {
+  final String userId = 'user-123';
+  String? sessionId;
+  CoachingWebSocket? webSocket;
+  final AudioPlayer audioPlayer = AudioPlayer();
+  final Record audioRecorder = Record();
+  bool isRecording = false;
+  List<Map<String, dynamic>> messages = [];
+  
+  // Informations sur le scénario
+  Map<String, dynamic>? selectedScenario;
+  List<Map<String, dynamic>> availableScenarios = [];
+  bool isLoadingScenarios = true;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadScenarios();
+  }
+  
+  @override
+  void dispose() {
+    webSocket?.close();
+    audioPlayer.dispose();
+    audioRecorder.dispose();
+    super.dispose();
+  }
+  
+  Future<void> _loadScenarios() async {
+    try {
+      setState(() {
+        isLoadingScenarios = true;
+      });
+      
+      // Charger la liste des scénarios disponibles
+      final scenarios = await listScenarios(
+        type: 'entretien',  // Vous pouvez changer le type selon vos besoins
+        language: 'fr',
+      );
+      
+      setState(() {
+        availableScenarios = scenarios;
+        isLoadingScenarios = false;
+      });
+    } catch (e) {
+      setState(() {
+        isLoadingScenarios = false;
+      });
+      _showError('Erreur lors du chargement des scénarios: $e');
+    }
+  }
+  
+  Future<void> _selectScenario(Map<String, dynamic> scenario) async {
+    try {
+      // Charger les détails complets du scénario
+      final scenarioDetails = await getScenario(scenario['id']);
+      
+      setState(() {
+        selectedScenario = scenarioDetails;
+      });
+      
+      // Initialiser la session avec le scénario sélectionné
+      _initSession(scenarioDetails['id']);
+    } catch (e) {
+      _showError('Erreur lors du chargement du scénario: $e');
+    }
+  }
+  
+  Future<void> _initSession(String scenarioId) async {
+    try {
+      // Initialiser la session avec le scénario sélectionné
+      final sessionData = await startSession(
+        userId: userId,
+        scenarioId: scenarioId,
+        language: 'fr',
+      );
+      
+      setState(() {
+        sessionId = sessionData['session_id'];
+        
+        // Ajouter le message initial
+        if (sessionData.containsKey('initial_message')) {
+          messages.add({
+            'role': 'coach',
+            'text': sessionData['initial_message']['text'],
+            'audio_url': sessionData['initial_message']['audio_url'],
+          });
+        }
+      });
+      
+      // Initialiser la connexion WebSocket
+      _initWebSocket();
+    } catch (e) {
+      _showError('Erreur lors de l\'initialisation de la session: $e');
+    }
+  }
+  
+  void _initWebSocket() {
+    if (sessionId == null) return;
+    
+    webSocket = CoachingWebSocket(sessionId!);
+    
+    webSocket!.onMessage = (data) {
+      setState(() {
+        if (data.containsKey('type')) {
+          switch (data['type']) {
+            case 'transcription':
+              // Ajouter la transcription comme message utilisateur
+              messages.add({
+                'role': 'user',
+                'text': data['text'],
+              });
+              break;
+            case 'coach_response':
+              // Ajouter la réponse du coach
+              messages.add({
+                'role': 'coach',
+                'text': data['text'],
+                'audio_url': data['audio_url'],
+              });
+              
+              // Jouer l'audio automatiquement
+              if (data.containsKey('audio_url')) {
+                _playAudio(data['audio_url']);
+              }
+              break;
+          }
+        }
+      });
+    };
+    
+    webSocket!.onError = (error) {
+      _showError('Erreur WebSocket: $error');
+    };
+    
+    webSocket!.connect();
+  }
+  
+  Future<void> _startRecording() async {
+    try {
+      if (await audioRecorder.hasPermission()) {
+        final tempDir = await getTemporaryDirectory();
+        final filePath = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
+        
+        await audioRecorder.start(path: filePath);
+        setState(() {
+          isRecording = true;
+        });
+      }
+    } catch (e) {
+      _showError('Erreur lors de l\'enregistrement: $e');
+    }
+  }
+  
+  Future<void> _stopRecording() async {
+    try {
+      final filePath = await audioRecorder.stop();
+      setState(() {
+        isRecording = false;
+      });
+      
+      if (filePath != null && webSocket != null) {
+        final file = File(filePath);
+        final bytes = await file.readAsBytes();
+        final base64Audio = base64Encode(bytes);
+        
+        webSocket!.send({
+          'type': 'audio',
+          'data': base64Audio,
+          'format': 'wav',
+        });
+      }
+    } catch (e) {
+      _showError('Erreur lors de l\'arrêt de l\'enregistrement: $e');
+    }
+  }
+  
+  Future<void> _playAudio(String audioUrl) async {
+    try {
+      await audioPlayer.play(UrlSource('$baseUrl$audioUrl'));
+    } catch (e) {
+      _showError('Erreur lors de la lecture audio: $e');
+    }
+  }
+  
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    // Si aucun scénario n'est sélectionné, afficher la liste des scénarios
+    if (selectedScenario == null) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('Choisir un scénario'),
+        ),
+        body: isLoadingScenarios
+          ? Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: availableScenarios.length,
+              itemBuilder: (context, index) {
+                final scenario = availableScenarios[index];
+                return ListTile(
+                  title: Text(scenario['name']),
+                  subtitle: Text(scenario['description']),
+                  trailing: Text(scenario['difficulty'] ?? 'medium'),
+                  onTap: () => _selectScenario(scenario),
+                );
+              },
+            ),
+      );
+    }
+    
+    // Si un scénario est sélectionné, afficher l'interface de coaching
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(selectedScenario!['name']),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.info_outline),
+            onPressed: () {
+              // Afficher les informations du scénario
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text(selectedScenario!['name']),
+                  content: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(selectedScenario!['description']),
+                        SizedBox(height: 16),
+                        Text('Type: ${selectedScenario!['type']}'),
+                        Text('Difficulté: ${selectedScenario!['difficulty']}'),
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text('Fermer'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              itemCount: messages.length,
+              itemBuilder: (context, index) {
+                final message = messages[index];
+                final isCoach = message['role'] == 'coach';
+                
+                return ListTile(
+                  leading: isCoach ? Icon(Icons.person) : Icon(Icons.account_circle),
+                  title: Text(message['text']),
+                  trailing: isCoach && message.containsKey('audio_url')
+                    ? IconButton(
+                        icon: Icon(Icons.play_arrow),
+                        onPressed: () => _playAudio(message['audio_url']),
+                      )
+                    : null,
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: ElevatedButton(
+              onPressed: isRecording ? _stopRecording : _startRecording,
+              child: Text(isRecording ? 'Arrêter l\'enregistrement' : 'Commencer à parler'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isRecording ? Colors.red : Colors.blue,
+                minimumSize: Size(double.infinity, 50),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+```
   void connect() {
     final wsUrl = 'ws://51.159.110.4:8083/ws/$sessionId';
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
