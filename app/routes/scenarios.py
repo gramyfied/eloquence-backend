@@ -31,7 +31,7 @@ class ScenarioResponse(BaseModel):
     tags: Optional[List[str]] = None
     preview_image: Optional[str] = None
 
-@router.get("/scenarios", response_model=List[ScenarioResponse])
+@router.get("/scenarios/", response_model=List[ScenarioResponse]) # Ajout du slash final
 async def list_scenarios(
     type: Optional[str] = None,
     difficulty: Optional[str] = None,
