@@ -3,6 +3,7 @@ Routes REST pour la gestion des sessions de coaching vocal.
 """
 
 import logging
+import os # Ajout de l'import manquant
 import json
 import uuid
 from typing import Dict, List, Optional, Any
