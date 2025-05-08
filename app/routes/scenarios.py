@@ -35,63 +35,82 @@ class ScenarioResponse(BaseModel):
     tags: Optional[List[str]] = None
     preview_image: Optional[str] = None
 
-@router.get("/scenarios/", response_model=List[ScenarioResponse], include_in_schema=True) # Assurez-vous qu'elle est dans le schéma OpenAPI
+@router.get("/scenarios/", response_model=List[ScenarioResponse], include_in_schema=True)
 async def list_scenarios(
-    type: Optional[str] = None,
-    difficulty: Optional[str] = None,
-    language: str = Query("fr", description="Langue des scénarios"), # Utilisation de Query pour une meilleure doc
-    # db: AsyncSession = Depends(get_db),
-    # current_user_id: str = Depends(get_current_user_id)
+    type: Optional[str] = Query(None, description="Filtrer par type de scénario"),
+    difficulty: Optional[str] = Query(None, description="Filtrer par difficulté"),
+    language: str = Query("fr", description="Langue des scénarios"),
+    # db: AsyncSession = Depends(get_db), # Gardé commenté pour l'instant
+    # current_user_id: str = Depends(get_current_user_id) # Gardé commenté pour l'instant
 ):
     """
-    Liste tous les scénarios disponibles (version de débogage).
-    Retourne une liste factice pour isoler les problèmes.
+    Liste tous les scénarios disponibles en lisant les fichiers JSON du répertoire 'examples'.
     """
-    logger_scenarios.error("<<<<< DANS list_scenarios - VERSION SIMPLIFIÉE - V2 >>>>>")
-    try:
-        # logger.warning("<<<< EXÉCUTION DE list_scenarios MODIFIÉE POUR DÉBOGAGE 500 >>>>") # Remplacé par le log ci-dessus
-        # Retourner une liste factice pour le test
-        dummy_scenarios = [
-            {
-                "id": "demo-1",
-                "name": "Entretien d'embauche (Factice)",
-                "description": "Simulation d'un entretien d'embauche.",
-                "type": "entretien",
-                "difficulty": "medium",
-                "language": "fr",
-                "tags": ["emploi", "communication"],
-                "preview_image": None
-            },
-            {
-                "id": "demo-2",
-                "name": "Présentation Projet (Factice)",
-                "description": "Simulation d'une présentation de projet.",
-                "type": "presentation",
-                "difficulty": "hard",
-                "language": "fr",
-                "tags": ["professionnel", "discours"],
-                "preview_image": None
-            }
-        ]
-        
-        # Filtrer la liste factice si des paramètres sont fournis (pour simuler le comportement)
-        filtered_scenarios = []
-        for scenario in dummy_scenarios:
-             if (type and scenario.get("type") != type) or \
-                (difficulty and scenario.get("difficulty") != difficulty) or \
-                (language and scenario.get("language", "fr") != language):
-                 continue
-             filtered_scenarios.append(scenario)
+    logger_scenarios.error("<<<<< DANS list_scenarios - V3 - Lecture depuis /examples/ >>>>>")
+    
+    scenarios = []
+    # Chemin vers le répertoire 'examples', relatif à l'emplacement de ce fichier (app/routes/scenarios.py)
+    # __file__ -> app/routes/scenarios.py
+    # os.path.dirname(__file__) -> app/routes
+    # os.path.dirname(os.path.dirname(__file__)) -> app
+    # os.path.dirname(os.path.dirname(os.path.dirname(__file__))) -> racine du projet (eloquence_backend_py)
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    examples_path = os.path.join(base_dir, "examples")
+    logger_scenarios.info(f"Recherche de scénarios dans : {examples_path}")
 
-        return filtered_scenarios
-        
-    except Exception as e:
-        # Ce bloc ne devrait pas être atteint avec la logique factice,
-        # mais on le garde par sécurité.
-        logger.error(f"Erreur inattendue dans list_scenarios (version factice): {e}")
+    if not os.path.isdir(examples_path):
+        logger_scenarios.error(f"Le répertoire des scénarios '{examples_path}' n'existe pas.")
+        # Retourner une liste vide ou une erreur appropriée si le répertoire n'existe pas
+        # Pour l'instant, nous allons lever une exception pour être clair sur le problème.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erreur interne lors de la récupération des scénarios factices: {str(e)}"
+            detail=f"Configuration incorrecte du serveur: Répertoire des scénarios non trouvé à {examples_path}"
+        )
+
+    try:
+        for filename in os.listdir(examples_path):
+            if filename.startswith("scenario_") and filename.endswith(".json"):
+                file_path = os.path.join(examples_path, filename)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        
+                        # Appliquer les filtres
+                        if type and data.get("type") != type:
+                            continue
+                        if difficulty and data.get("difficulty") != difficulty:
+                            continue
+                        if language and data.get("language", "fr") != language: # fr par défaut si non spécifié dans JSON
+                            continue
+                        
+                        # Utiliser le nom du fichier (sans .json) comme ID si non présent dans le JSON
+                        scenario_id = data.get("id", filename[:-5]) # exemple: scenario_entretien_embauche
+
+                        scenarios.append(
+                            ScenarioResponse(
+                                id=scenario_id,
+                                name=data.get("name", "Nom non défini"),
+                                description=data.get("description", "Description non définie"),
+                                type=data.get("type", "inconnu"),
+                                difficulty=data.get("difficulty"),
+                                language=data.get("language", "fr"),
+                                tags=data.get("tags", []),
+                                preview_image=data.get("preview_image")
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger_scenarios.error(f"Erreur de décodage JSON pour le fichier: {file_path}")
+                except Exception as e_file:
+                    logger_scenarios.error(f"Erreur lors du traitement du fichier {file_path}: {e_file}")
+        
+        logger_scenarios.info(f"{len(scenarios)} scénarios trouvés et filtrés.")
+        return scenarios
+        
+    except Exception as e:
+        logger_scenarios.error(f"Erreur inattendue dans list_scenarios (V3): {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur interne du serveur lors de la récupération des scénarios: {str(e)}"
         )
 
 @router.get("/scenarios/{scenario_id}", response_model=Dict[str, Any])
