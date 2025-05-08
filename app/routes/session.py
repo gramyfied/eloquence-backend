@@ -45,34 +45,83 @@ class SessionEndResponse(BaseModel):
     message: str
     final_summary_url: Optional[str] = None
 
-@router.post("/session/start", response_model=SessionStartResponse) # Rétablir la route originale
+@router.post("/session/start", response_model=SessionStartResponse)
 async def start_session(
     request: SessionStartRequest,
-    # background_tasks: BackgroundTasks, # TEMPORAIREMENT COMMENTÉ
-    # orchestrator: Orchestrator = Depends(get_orchestrator), # TEMPORAIREMENT COMMENTÉ
-    # db: AsyncSession = Depends(get_db) # TEMPORAIREMENT COMMENTÉ
-    # current_user_id: str = Depends(get_current_user_id) # TEMPORAIREMENT COMMENTÉ POUR DÉBOGAGE 403
+    # background_tasks: BackgroundTasks, # Gardé commenté
+    # orchestrator: Orchestrator = Depends(get_orchestrator), # Gardé commenté
+    # db: AsyncSession = Depends(get_db), # Gardé commenté
+    current_user_id: str = Depends(get_current_user_id) # Réactivé (utilise auth.py simplifié)
 ):
     """
     Démarre une nouvelle session de coaching vocal.
-    Retourne l'ID de session et l'URL WebSocket pour la connexion.
-    MODIFICATION RADICALE POUR DÉBOGAGE 403
+    Valide le scenario_id, génère un ID de session et retourne l'URL WebSocket et le message initial.
+    V3 - Logique restaurée (lecture fichier JSON), sans création DB/Orchestrator.
     """
-    logger.warning("<<<< EXÉCUTION DE start_session MODIFIÉE RADICALEMENT POUR DÉBOGAGE 403 >>>>")
-    logger.info(f"Requête reçue pour user_id: {request.user_id} et scenario_id: {request.scenario_id}")
+    logger.warning("<<<<< DANS start_session - V3 - Logique restaurée (lecture JSON) >>>>>")
+    logger.info(f"Requête reçue pour user_id: {current_user_id} (authentifié) et scenario_id: {request.scenario_id}") # Utilise current_user_id
 
-    # Retourner une réponse minimale valide pour satisfaire le response_model
-    dummy_session_id = f"debug-session-{uuid.uuid4()}"
-    dummy_websocket_url = f"/ws/{dummy_session_id}"
-    dummy_initial_message = {
-        "text": "Session de débogage - réponse minimale.",
-        "audio_url": ""
-    }
+    if not request.scenario_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Le champ 'scenario_id' est obligatoire."
+        )
+
+    # Construire le chemin vers le fichier JSON du scénario
+    # Chemin relatif depuis ce fichier (app/routes/session.py) vers examples/
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    scenario_filename = f"scenario_{request.scenario_id}.json" # Hypothèse: scenario_id correspond au nom du fichier
+    scenario_path = os.path.join(base_dir, "examples", scenario_filename)
+    
+    logger.info(f"Vérification de l'existence du scénario : {scenario_path}")
+
+    if not os.path.exists(scenario_path):
+        logger.warning(f"Scénario non trouvé : {scenario_path}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scénario '{request.scenario_id}' non trouvé."
+        )
+
+    # Charger le message initial depuis le fichier JSON
+    try:
+        with open(scenario_path, "r", encoding="utf-8") as f:
+            scenario_data = json.load(f)
+            initial_message = scenario_data.get("initial_message")
+            if not initial_message or not isinstance(initial_message, dict) or "text" not in initial_message:
+                 logger.error(f"Format 'initial_message' invalide dans {scenario_path}")
+                 raise HTTPException(
+                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                     detail=f"Données de scénario invalides pour '{request.scenario_id}'."
+                 )
+            # Assurer que audio_url est présent, même si vide
+            initial_message.setdefault("audio_url", "")
+
+    except json.JSONDecodeError:
+        logger.error(f"Erreur de décodage JSON pour le scénario: {scenario_path}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Impossible de lire les données du scénario '{request.scenario_id}'."
+        )
+    except Exception as e:
+        logger.error(f"Erreur inattendue lors du chargement du scénario {scenario_path}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur serveur lors du chargement du scénario '{request.scenario_id}'."
+        )
+
+    # Générer un ID de session et l'URL WebSocket
+    session_id = str(uuid.uuid4())
+    websocket_url = f"/ws/{session_id}" # URL relative pour le WebSocket
+
+    logger.info(f"Session démarrée avec succès : id={session_id}, scenario={request.scenario_id}")
+
+    # TODO: Ajouter ici la logique pour créer la session dans la base de données
+    # et potentiellement initialiser l'orchestrateur si nécessaire.
 
     return SessionStartResponse(
-        session_id=dummy_session_id,
-        websocket_url=dummy_websocket_url,
-        initial_message=dummy_initial_message
+        session_id=session_id,
+        websocket_url=websocket_url,
+        initial_message=initial_message
     )
 
 @router.get("/session/{session_id}/feedback", response_model=FeedbackResponse)
