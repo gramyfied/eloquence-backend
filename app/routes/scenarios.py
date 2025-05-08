@@ -1,3 +1,4 @@
+# DEBUG-MARKER-SCENARIOS-V1
 """
 Routes pour la gestion des scénarios de coaching.
 """

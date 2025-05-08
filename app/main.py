@@ -25,6 +25,27 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# AJOUT POUR DÉBOGAGE DE VERSION DE FICHIER
+try:
+    # Utiliser un chemin relatif correct depuis l'emplacement de main.py
+    scenarios_file_path = os.path.join(os.path.dirname(__file__), "routes", "scenarios.py")
+    if not os.path.exists(scenarios_file_path):
+        # Fallback si la structure est app/main.py et app/routes/scenarios.py (courant)
+        scenarios_file_path = "app/routes/scenarios.py"
+        if not os.path.exists(scenarios_file_path): # Dernier fallback si exécuté depuis la racine du projet
+             scenarios_file_path = "eloquence_backend_py/app/routes/scenarios.py"
+
+
+    if os.path.exists(scenarios_file_path):
+        with open(scenarios_file_path, "r", encoding="utf-8") as f_scenarios_check:
+            first_line_scenarios = f_scenarios_check.readline().strip()
+            logger.warning(f">>>>> CHECK VERSION SCENARIOS.PY AU DÉMARRAGE (depuis {scenarios_file_path}): '{first_line_scenarios}' <<<<<")
+    else:
+        logger.error(f">>>>> ERREUR CHECK VERSION: Fichier scenarios.py non trouvé aux emplacements testés. Testé: {scenarios_file_path} <<<<<")
+except Exception as e_check:
+    logger.error(f">>>>> ERREUR LECTURE scenarios.py POUR CHECK VERSION: {e_check} <<<<<")
+# FIN AJOUT DÉBOGAGE
+
 # Création de l'application FastAPI
 app = FastAPI(
     title="Eloquence Backend",
