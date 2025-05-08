@@ -45,45 +45,34 @@ class SessionEndResponse(BaseModel):
     message: str
     final_summary_url: Optional[str] = None
 
-@router.post("/session/start", response_model=SessionStartResponse)
+@router.post("/session/start", response_model=SessionStartResponse) # Rétablir la route originale
 async def start_session(
     request: SessionStartRequest,
-    background_tasks: BackgroundTasks,
-    orchestrator: Orchestrator = Depends(get_orchestrator),
-    db: AsyncSession = Depends(get_db),
-    current_user_id: str = Depends(get_current_user_id)
+    # background_tasks: BackgroundTasks, # TEMPORAIREMENT COMMENTÉ
+    # orchestrator: Orchestrator = Depends(get_orchestrator), # TEMPORAIREMENT COMMENTÉ
+    # db: AsyncSession = Depends(get_db) # TEMPORAIREMENT COMMENTÉ
+    # current_user_id: str = Depends(get_current_user_id) # TEMPORAIREMENT COMMENTÉ POUR DÉBOGAGE 403
 ):
     """
     Démarre une nouvelle session de coaching vocal.
     Retourne l'ID de session et l'URL WebSocket pour la connexion.
+    MODIFICATION RADICALE POUR DÉBOGAGE 403
     """
-    # Générer un nouvel ID de session
-    session_uuid = uuid.uuid4()
-    session_id_str = str(session_uuid)
-    
-    # Message de bienvenue par défaut
-    welcome_message = "Bonjour, je suis votre coach vocal. Comment puis-je vous aider aujourd'hui ?"
-    
-    # Créer une nouvelle session (version simplifiée)
-    try:
-        # Insérer une session simple
-        insert_query = "INSERT INTO coaching_sessions (id, user_id) VALUES ($1, $2)"
-        await db.execute(insert_query, [session_uuid, request.user_id])
-    except Exception as e:
-        logger.error(f"Erreur lors de la création de la session: {e}")
-        # Continuer même si l'insertion échoue (pour les tests)
-    
-    # Construire l'URL WebSocket
-    websocket_url = f"/ws/{session_id_str}"
-    audio_url = f"/audio/welcome_{session_id_str}.wav"
+    logger.warning("<<<< EXÉCUTION DE start_session MODIFIÉE RADICALEMENT POUR DÉBOGAGE 403 >>>>")
+    logger.info(f"Requête reçue pour user_id: {request.user_id} et scenario_id: {request.scenario_id}")
+
+    # Retourner une réponse minimale valide pour satisfaire le response_model
+    dummy_session_id = f"debug-session-{uuid.uuid4()}"
+    dummy_websocket_url = f"/ws/{dummy_session_id}"
+    dummy_initial_message = {
+        "text": "Session de débogage - réponse minimale.",
+        "audio_url": ""
+    }
 
     return SessionStartResponse(
-        session_id=session_id_str,
-        websocket_url=websocket_url,
-        initial_message={
-            "text": welcome_message,
-            "audio_url": audio_url
-        }
+        session_id=dummy_session_id,
+        websocket_url=dummy_websocket_url,
+        initial_message=dummy_initial_message
     )
 
 @router.get("/session/{session_id}/feedback", response_model=FeedbackResponse)

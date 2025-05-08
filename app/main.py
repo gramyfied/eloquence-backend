@@ -47,7 +47,7 @@ async def startup_event():
     """
     Événement exécuté au démarrage de l'application.
     """
-    logger.info(f"Démarrage de l'application Eloquence Backend en mode {settings.MODE}")
+    logger.info(f"Démarrage de l'application Eloquence Backend en mode DEBUG: {settings.DEBUG}") # Remplacé settings.MODE par settings.DEBUG
     
     # Initialisation de la base de données
     await init_db()
@@ -96,7 +96,8 @@ async def health():
 # Inclusion des routers
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(coaching_router, prefix="/coaching", tags=["coaching"])
-app.include_router(session_router, prefix="/api", tags=["session"])
+app.include_router(session_router, prefix="/api", tags=["session"]) # Rétablir le préfixe /api
+# app.include_router(session_router, tags=["session"]) # Supprimer l'inclusion sans préfixe
 app.include_router(audio_router, prefix="/api", tags=["audio"])
 app.include_router(monitoring_router, prefix="/api", tags=["monitoring"])
 app.include_router(scenarios_router, prefix="/api", tags=["scenarios"])

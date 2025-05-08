@@ -35,102 +35,57 @@ async def list_scenarios(
     type: Optional[str] = None,
     difficulty: Optional[str] = None,
     language: str = "fr",
-    db: AsyncSession = Depends(get_db),
-    current_user_id: str = Depends(get_current_user_id)
+    # db: AsyncSession = Depends(get_db), # Commenté pour débogage 500
+    # current_user_id: str = Depends(get_current_user_id) # Commenté pour débogage 500
 ):
     """
     Liste tous les scénarios disponibles.
-    Peut être filtré par type, difficulté et langue.
+    MODIFIÉ POUR DÉBOGAGE 500 : Retourne une liste factice.
     """
+    logger.warning("<<<< EXÉCUTION DE list_scenarios MODIFIÉE POUR DÉBOGAGE 500 >>>>")
     try:
-        # Construire la requête SQL
-        query = """
-        SELECT id, name, description, type, difficulty, language, tags, preview_image
-        FROM scenario_templates
-        WHERE 1=1
-        """
-        
-        params = []
-        param_index = 1
-        
-        if type:
-            query += f" AND type = ${param_index}"
-            params.append(type)
-            param_index += 1
-        
-        if difficulty:
-            query += f" AND difficulty = ${param_index}"
-            params.append(difficulty)
-            param_index += 1
-        
-        if language:
-            query += f" AND language = ${param_index}"
-            params.append(language)
-            param_index += 1
-        
-        # Exécuter la requête
-        result = await db.execute(query, params)
-        scenarios_data = await result.fetchall()
-        
-        # Construire la réponse
-        scenarios = []
-        for row in scenarios_data:
-            scenario = {
-                "id": row[0],
-                "name": row[1],
-                "description": row[2],
-                "type": row[3],
-                "difficulty": row[4],
-                "language": row[5],
-                "tags": row[6] if row[6] else [],
-                "preview_image": row[7]
+        # Retourner une liste factice pour le test
+        dummy_scenarios = [
+            {
+                "id": "demo-1",
+                "name": "Entretien d'embauche (Factice)",
+                "description": "Simulation d'un entretien d'embauche.",
+                "type": "entretien",
+                "difficulty": "medium",
+                "language": "fr",
+                "tags": ["emploi", "communication"],
+                "preview_image": None
+            },
+            {
+                "id": "demo-2",
+                "name": "Présentation Projet (Factice)",
+                "description": "Simulation d'une présentation de projet.",
+                "type": "presentation",
+                "difficulty": "hard",
+                "language": "fr",
+                "tags": ["professionnel", "discours"],
+                "preview_image": None
             }
-            scenarios.append(scenario)
+        ]
         
-        # Si aucun scénario n'est trouvé dans la base de données, charger les exemples
-        if not scenarios:
-            # Charger les scénarios d'exemple depuis les fichiers JSON
-            examples_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "examples")
-            
-            example_files = [
-                "scenario_entretien_embauche.json",
-                "scenario_presentation.json",
-                "scenario_conversation.json"
-            ]
-            
-            for filename in example_files:
-                file_path = os.path.join(examples_dir, filename)
-                if os.path.exists(file_path):
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            scenario_data = json.load(f)
-                            
-                            # Filtrer par type, difficulté et langue si spécifié
-                            if (type and scenario_data.get("type") != type) or \
-                               (difficulty and scenario_data.get("difficulty") != difficulty) or \
-                               (language and scenario_data.get("language", "fr") != language):
-                                continue
-                            
-                            scenario = {
-                                "id": scenario_data.get("id", str(uuid.uuid4())),
-                                "name": scenario_data.get("name", "Scénario sans nom"),
-                                "description": scenario_data.get("description", ""),
-                                "type": scenario_data.get("type", "entretien"),
-                                "difficulty": scenario_data.get("difficulty", "medium"),
-                                "language": scenario_data.get("language", "fr"),
-                                "tags": scenario_data.get("tags", []),
-                                "preview_image": scenario_data.get("preview_image")
-                            }
-                            scenarios.append(scenario)
-                    except Exception as e:
-                        logger.error(f"Erreur lors du chargement du scénario {filename}: {e}")
+        # Filtrer la liste factice si des paramètres sont fournis (pour simuler le comportement)
+        filtered_scenarios = []
+        for scenario in dummy_scenarios:
+             if (type and scenario.get("type") != type) or \
+                (difficulty and scenario.get("difficulty") != difficulty) or \
+                (language and scenario.get("language", "fr") != language):
+                 continue
+             filtered_scenarios.append(scenario)
+
+        return filtered_scenarios
         
-        return scenarios
     except Exception as e:
-        logger.error(f"Erreur lors de la récupération des scénarios: {e}")
+        # Ce bloc ne devrait pas être atteint avec la logique factice,
+        # mais on le garde par sécurité.
+        logger.error(f"Erreur inattendue dans list_scenarios (version factice): {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erreur lors de la récupération des scénarios: {str(e)}"
+            detail=f"Erreur interne lors de la récupération des scénarios factices: {str(e)}"
         )
 
 @router.get("/scenarios/{scenario_id}", response_model=Dict[str, Any])
