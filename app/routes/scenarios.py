@@ -1,9 +1,13 @@
-# DEBUG-MARKER-SCENARIOS-V1
+# DEBUG-MARKER-SCENARIOS-V2
+import logging # Assurez-vous que logging est importé
+logger_scenarios = logging.getLogger(__name__)
+logger_scenarios.error("<<<<< SCENARIOS.PY MODULE CHARGÉ - V2 >>>>>") # Log au chargement du module
+
 """
 Routes pour la gestion des scénarios de coaching.
 """
 
-import logging
+# import logging # Déplacé plus haut
 import json
 import os
 import uuid
@@ -31,20 +35,21 @@ class ScenarioResponse(BaseModel):
     tags: Optional[List[str]] = None
     preview_image: Optional[str] = None
 
-@router.get("/scenarios/", response_model=List[ScenarioResponse]) # Ajout du slash final
+@router.get("/scenarios/", response_model=List[ScenarioResponse], include_in_schema=True) # Assurez-vous qu'elle est dans le schéma OpenAPI
 async def list_scenarios(
     type: Optional[str] = None,
     difficulty: Optional[str] = None,
-    language: str = "fr",
-    # db: AsyncSession = Depends(get_db), # Commenté pour débogage 500
-    # current_user_id: str = Depends(get_current_user_id) # Commenté pour débogage 500
+    language: str = Query("fr", description="Langue des scénarios"), # Utilisation de Query pour une meilleure doc
+    # db: AsyncSession = Depends(get_db),
+    # current_user_id: str = Depends(get_current_user_id)
 ):
     """
-    Liste tous les scénarios disponibles.
-    MODIFIÉ POUR DÉBOGAGE 500 : Retourne une liste factice.
+    Liste tous les scénarios disponibles (version de débogage).
+    Retourne une liste factice pour isoler les problèmes.
     """
-    logger.warning("<<<< EXÉCUTION DE list_scenarios MODIFIÉE POUR DÉBOGAGE 500 >>>>")
+    logger_scenarios.error("<<<<< DANS list_scenarios - VERSION SIMPLIFIÉE - V2 >>>>>")
     try:
+        # logger.warning("<<<< EXÉCUTION DE list_scenarios MODIFIÉE POUR DÉBOGAGE 500 >>>>") # Remplacé par le log ci-dessus
         # Retourner une liste factice pour le test
         dummy_scenarios = [
             {
