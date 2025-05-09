@@ -224,7 +224,8 @@ async def get_session_feedback(
                 "lexical_metrics": kaldi.lexical_metrics,
                 "prosody_metrics": kaldi.prosody_metrics,
                 "personalized_feedback": kaldi.personalized_feedback if hasattr(kaldi, 'personalized_feedback') else None
-            }
+            },
+            "turn_number": turn.turn_number # Ajout du turn_number
         }
         feedback_results_list.append(feedback_item)
 
