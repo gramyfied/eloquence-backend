@@ -147,7 +147,7 @@ async def test_get_feedback_with_segment_id_filter(client: httpx.AsyncClient, as
     data_turn = response_turn.json()
     assert len(data_turn["feedback_results"]) == 1
     assert data_turn["feedback_results"][0]["turn_number"] == 2
-    assert data_turn["feedback_results"][0]["segment_id"] == str(feedback_id_2)
+    assert data_turn["feedback_results"][0]["segment_id"] == str(turn_id_2) # Correction: comparer avec turn_id_2
 
     # Filtrer par turn_id_1 (ID du SessionTurn)
     response_fb = await client.get(f"/api/session/{session_id}/feedback?segment_id={turn_id_1}") # <-- Corrigé
