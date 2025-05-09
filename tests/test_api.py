@@ -88,17 +88,19 @@ async def test_get_feedback_success(client: httpx.AsyncClient, async_test_sessio
     fb1 = feedback_map[1]
     # Correction: L'API retourne l'ID du turn dans segment_id, pas l'ID du feedback
     assert fb1["segment_id"] == str(turn_id_1)
-    assert fb1["pronunciation"]["overall_gop_score"] == 0.9
+    # Correction: Accéder aux scores via la clé "feedback"
+    assert fb1["feedback"]["pronunciation_scores"]["overall_gop_score"] == 0.9
     # ... autres assertions pour fb1 ...
 
     assert 2 in feedback_map # <-- Indentation corrigée
     fb2 = feedback_map[2]
     # Correction: L'API retourne l'ID du turn dans segment_id, pas l'ID du feedback
     assert fb2["segment_id"] == str(turn_id_2)
-    assert fb2["pronunciation"] == {}
-    assert fb2["fluency"] == {}
-    assert fb2["lexical"] == {}
-    assert fb2["prosody"] == {}
+    # Correction: Accéder aux scores via la clé "feedback"
+    assert fb2["feedback"]["pronunciation_scores"] == {"overall_gop_score": 0.8} # Vérifier le contenu exact
+    assert fb2["feedback"]["fluency_metrics"] == {"speech_rate_wpm": 130} # Vérifier le contenu exact
+    assert fb2["feedback"]["lexical_metrics"] == {"ttr": 0.9} # Vérifier le contenu exact
+    assert fb2["feedback"]["prosody_metrics"] == {"pitch": 160} # Vérifier le contenu exact
     # ...
 
 @pytest.mark.asyncio
