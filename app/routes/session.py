@@ -161,53 +161,76 @@ async def start_session(
 @router.get("/session/{session_id}/feedback", response_model=FeedbackResponse)
 async def get_session_feedback(
     session_id: uuid.UUID,
-    segment_id: Optional[str] = None,
-    feedback_type: Optional[str] = None,
+    segment_id: Optional[uuid.UUID] = None, # segment_id est l'ID d'un SessionTurn (UUID)
+    feedback_type: Optional[str] = None, # Ignoré pour l'instant
     db: AsyncSession = Depends(get_db),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
     Récupère les résultats d'analyse Kaldi pour une session.
-    Peut être filtré par segment_id ou type de feedback.
+    Peut être filtré par segment_id (ID du SessionTurn).
+    V2 - Logique DB restaurée.
     """
-    # Pour les tests, retourner directement un résultat factice
+    logger.info(f"<<<<< DANS get_session_feedback - V2 - Logique DB restaurée >>>>>")
+    logger.info(f"Récupération feedback pour session_id: {session_id}, segment_id: {segment_id}, user: {current_user_id}")
+
+    # 1. Vérifier l'existence de la session et l'accès utilisateur
+    coaching_session = await db.get(CoachingSession, session_id)
+    if not coaching_session:
+        logger.warning(f"Session non trouvée: {session_id}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session non trouvée")
+
+    # Note: La logique d'accès utilisateur (check_user_access) pourrait être plus complexe
+    # Pour l'instant, on se base sur le user_id de la session si SKIP_AUTH_CHECK n'est pas True.
+    # Notre get_current_user_id simplifié retourne "debug-user", donc cette vérification est pour l'exemple.
+    if coaching_session.user_id != current_user_id and current_user_id != "debug-user": # Permettre à debug-user d'accéder
+        logger.warning(f"Accès non autorisé à la session {session_id} pour l'utilisateur {current_user_id}")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès non autorisé à cette session")
+
+    # 2. Construire la requête pour les feedbacks
+    stmt = (
+        select(SessionTurn, KaldiFeedback, Participant)
+        .join(KaldiFeedback, KaldiFeedback.turn_id == SessionTurn.id)
+        .join(Participant, Participant.id == SessionTurn.participant_id)
+        .where(SessionTurn.session_id == session_id)
+        .order_by(SessionTurn.turn_number) # Ordonner par numéro de tour
+    )
+
+    if segment_id:
+        logger.info(f"Filtrage par segment_id (turn_id): {segment_id}")
+        stmt = stmt.where(SessionTurn.id == segment_id)
+    
+    results = await db.execute(stmt)
+    turn_feedback_data = results.all() # Liste de tuples (SessionTurn, KaldiFeedback, Participant)
+
+    if not turn_feedback_data:
+        logger.info(f"Aucun feedback trouvé pour la session {session_id} (segment: {segment_id})")
+        # Si segment_id est spécifié et rien n'est trouvé, c'est un 404 pour ce segment.
+        # Si aucun segment_id n'est spécifié et la liste est vide, c'est OK, juste pas de feedback.
+        if segment_id:
+             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Aucun feedback trouvé pour le segment {segment_id} de cette session.")
+
+    feedback_results_list: List[Dict[str, Any]] = []
+    for turn, kaldi, participant in turn_feedback_data:
+        feedback_item = {
+            "segment_id": str(turn.id),
+            # Simplification: user_text et coach_text basés sur le rôle du participant du tour
+            "user_text": turn.text_content if participant.role == "user" else None,
+            "coach_text": turn.text_content if participant.role != "user" else None, # ou "assistant", "system"
+            "audio_url": turn.audio_path, # Assumer que audio_path est l'URL ou un identifiant pour la construire
+            "feedback": {
+                "pronunciation_scores": kaldi.pronunciation_scores,
+                "fluency_metrics": kaldi.fluency_metrics,
+                "lexical_metrics": kaldi.lexical_metrics,
+                "prosody_metrics": kaldi.prosody_metrics,
+                "personalized_feedback": kaldi.personalized_feedback # Si ce champ existe et est pertinent
+            }
+        }
+        feedback_results_list.append(feedback_item)
+
     return FeedbackResponse(
         session_id=str(session_id),
-        feedback_results=[
-            {
-                "segment_id": str(uuid.uuid4()),
-                "user_text": "Bonjour, comment puis-je améliorer ma diction ?",
-                "coach_text": "Bonjour ! Je vais vous aider à améliorer votre diction. Commençons par quelques exercices simples.",
-                "audio_url": f"/audio/turn_factice.wav",
-                "feedback": {
-                    "pronunciation_scores": {
-                        "overall": 0.85,
-                        "phonemes": {
-                            "b": 0.9,
-                            "o": 0.85,
-                            "n": 0.8,
-                            "j": 0.9,
-                            "u": 0.85,
-                            "r": 0.8
-                        }
-                    },
-                    "fluency_metrics": {
-                        "speech_rate": 3.2,
-                        "articulation_rate": 4.5,
-                        "pause_count": 2,
-                        "mean_pause_duration": 0.3
-                    },
-                    "lexical_metrics": {
-                        "lexical_diversity": 0.7,
-                        "word_count": 8
-                    },
-                    "prosody_metrics": {
-                        "pitch_variation": 0.15,
-                        "intensity_variation": 0.12
-                    }
-                }
-            }
-        ]
+        feedback_results=feedback_results_list
     )
 
 @router.post("/session/{session_id}/end", response_model=SessionEndResponse)
