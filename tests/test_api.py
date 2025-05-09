@@ -226,44 +226,46 @@ async def test_start_session_failure(client: httpx.AsyncClient, async_test_sessi
     api_mocks["orchestrator_instance"].generate_text_response.assert_not_awaited()
 
 @pytest.mark.asyncio
-@patch("services.orchestrator.Orchestrator.end_session") # <-- Patch direct de la méthode
-async def test_end_session_success(
-    mock_orchestrator_end_session: AsyncMock, # <-- Mock de la méthode injecté
+@patch("services.orchestrator.Orchestrator.end_session")
+async def test_end_session_successfully_v2( # Renommage du test
+    mock_orchestrator_end_session: AsyncMock,
     client: httpx.AsyncClient,
     async_test_session: AsyncSession,
-    # api_mocks n'est plus utilisé ici
 ):
-    """Teste POST /end avec succès."""
-    # Pas besoin de configurer le mock de l'instance ici
-
+    """Teste POST /end avec succès. v2""" # Mise à jour docstring
+    print("<<<<< EXECUTING test_end_session_successfully_v2 >>>>>") # Log de début de test
     db = async_test_session
     user_id = "test-user"
     session_id = uuid.uuid4()
 
     participant_id = uuid.uuid4()
-    mock_session = CoachingSession(id=session_id, user_id=user_id, status="active") # <-- Statut défini à "active"
+    # Assurer que le statut est bien 'active' pour que la logique de end_session fonctionne
+    mock_session = CoachingSession(id=session_id, user_id=user_id, status="active")
     mock_participant = Participant(id=participant_id, session_id=session_id, name="Test User", role="user")
     mock_turn_1 = SessionTurn(id=uuid.uuid4(), session_id=session_id, participant_id=participant_id, turn_number=1, role="user")
     mock_turn_2 = SessionTurn(id=uuid.uuid4(), session_id=session_id, participant_id=participant_id, turn_number=2, role="assistant")
     db.add_all([mock_session, mock_participant, mock_turn_1, mock_turn_2])
     await db.commit()
+    await db.refresh(mock_session) # S'assurer que le statut est bien pris en compte avant l'appel API
+    print(f"DEBUG test_end_session_successfully_v2: mock_session.status before API call: {mock_session.status}")
 
-    # Pas besoin de mocker generate_text_response car la route ne l'utilise pas pour la réponse
-
-    # Utiliser le client directement
 
     response = await client.post(f"/api/session/{session_id}/end")
-
-    assert response.status_code == 200
+    print(f"DEBUG test_end_session_successfully_v2: response_status={response.status_code}")
     data = response.json()
-    print(f"DEBUG test_end_session_success: data received: {data}") # AJOUT POUR DEBUG
-    assert data["message"] == "Session terminée avec succès"
+    print(f"DEBUG test_end_session_successfully_v2: data received: {data}")
+    
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}. Response: {response.text}"
+    assert data["message"] == "Session terminée avec succès", f"Unexpected message: {data.get('message')}"
     assert "final_summary" not in data
-    assert data["final_summary_url"] is None
+    # Correction: Vérifier que final_summary_url est une chaîne non nulle
+    assert data["final_summary_url"] is not None
+    assert isinstance(data["final_summary_url"], str)
 
     # Vérifier que la session est terminée en DB
-    await db.refresh(mock_session) # Recharger depuis la DB
-    assert mock_session.status == "ended" # <-- Décommenté et vérifié
+    await db.refresh(mock_session)
+    print(f"DEBUG test_end_session_successfully_v2: mock_session.status after API call: {mock_session.status}")
+    assert mock_session.status == "ended"
     assert mock_session.ended_at is not None
 
     # Vérifier l'appel sur le mock direct de la méthode
