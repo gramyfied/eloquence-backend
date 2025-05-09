@@ -86,13 +86,15 @@ async def test_get_feedback_success(client: httpx.AsyncClient, async_test_sessio
     
     assert 1 in feedback_map
     fb1 = feedback_map[1]
-    assert fb1["segment_id"] == str(feedback_id_1)
+    # Correction: L'API retourne l'ID du turn dans segment_id, pas l'ID du feedback
+    assert fb1["segment_id"] == str(turn_id_1)
     assert fb1["pronunciation"]["overall_gop_score"] == 0.9
     # ... autres assertions pour fb1 ...
 
     assert 2 in feedback_map # <-- Indentation corrigée
     fb2 = feedback_map[2]
-    assert fb2["segment_id"] is None
+    # Correction: L'API retourne l'ID du turn dans segment_id, pas l'ID du feedback
+    assert fb2["segment_id"] == str(turn_id_2)
     assert fb2["pronunciation"] == {}
     assert fb2["fluency"] == {}
     assert fb2["lexical"] == {}
