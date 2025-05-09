@@ -59,12 +59,19 @@ async def test_get_feedback_success(client: httpx.AsyncClient, async_test_sessio
     mock_participant = Participant(id=participant_id, session_id=session_id, name="Test User", role="user")
     mock_turn_1 = SessionTurn(id=turn_id_1, session_id=session_id, participant_id=participant_id, turn_number=1, role="user", text_content="test transcription 1")
     mock_turn_2 = SessionTurn(id=turn_id_2, session_id=session_id, participant_id=participant_id, turn_number=2, role="user", text_content="test transcription 2")
+    feedback_id_2 = uuid.uuid4() # Ajouter un deuxième ID de feedback
     mock_feedback_1 = KaldiFeedback(
         id=feedback_id_1, turn_id=turn_id_1,
         pronunciation_scores={"overall_gop_score": 0.9}, fluency_metrics={"speech_rate_wpm": 120},
         lexical_metrics={"ttr": 0.8}, prosody_metrics={"pitch": 150}
     )
-    db.add_all([mock_session, mock_participant, mock_turn_1, mock_turn_2, mock_feedback_1])
+    mock_feedback_2 = KaldiFeedback( # Ajouter un deuxième objet feedback
+        id=feedback_id_2, turn_id=turn_id_2,
+        pronunciation_scores={"overall_gop_score": 0.8}, fluency_metrics={"speech_rate_wpm": 130},
+        lexical_metrics={"ttr": 0.9}, prosody_metrics={"pitch": 160}
+    )
+    # Ajouter les deux feedbacks à la session
+    db.add_all([mock_session, mock_participant, mock_turn_1, mock_turn_2, mock_feedback_1, mock_feedback_2])
     await db.commit()
 
     # Utiliser le client directement (il est yieldé par la fixture)
