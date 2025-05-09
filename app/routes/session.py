@@ -203,6 +203,14 @@ async def get_session_feedback(
     results = await db.execute(stmt)
     turn_feedback_data = results.all() # Liste de tuples (SessionTurn, KaldiFeedback, Participant)
 
+    # Log pour débogage
+    if turn_feedback_data:
+        for i, (t, k, p) in enumerate(turn_feedback_data):
+            logger.info(f"Debug feedback item {i}: turn.id={t.id}, turn.turn_number={t.turn_number}, kaldi.id={k.id}, participant.id={p.id}, participant.role={p.role}")
+    else:
+        logger.info(f"Debug: turn_feedback_data est vide pour session {session_id}, segment {segment_id}")
+
+
     if not turn_feedback_data:
         logger.info(f"Aucun feedback trouvé pour la session {session_id} (segment: {segment_id})")
         # Si segment_id est spécifié et rien n'est trouvé, c'est un 404 pour ce segment.
