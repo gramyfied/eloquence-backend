@@ -49,18 +49,19 @@ class SessionEndResponse(BaseModel):
 @router.post("/session/start", response_model=SessionStartResponse)
 async def start_session(
     request: SessionStartRequest,
+    db: AsyncSession = Depends(get_db), # Réactivé
+    current_user_id: str = Depends(get_current_user_id) # Réactivé
     # background_tasks: BackgroundTasks, # Gardé commenté
     # orchestrator: Orchestrator = Depends(get_orchestrator), # Gardé commenté
-    # db: AsyncSession = Depends(get_db), # Gardé commenté
-    current_user_id: str = Depends(get_current_user_id) # Réactivé (utilise auth.py simplifié)
 ):
     """
     Démarre une nouvelle session de coaching vocal.
-    Valide le scenario_id, génère un ID de session et retourne l'URL WebSocket et le message initial.
-    V3 - Logique restaurée (lecture fichier JSON), sans création DB/Orchestrator.
+    Valide le scenario_id (DB puis fichier), génère un ID de session,
+    crée une CoachingSession en DB, et retourne l'URL WebSocket et le message initial.
+    V4 - Logique DB pour ScenarioTemplate et création CoachingSession.
     """
-    logger.warning("<<<<< DANS start_session - V3 - Logique restaurée (lecture JSON) >>>>>")
-    logger.info(f"Requête reçue pour user_id: {current_user_id} (authentifié) et scenario_id: {request.scenario_id}") # Utilise current_user_id
+    logger.warning("<<<<< DANS start_session - V4 - Logique DB et création CoachingSession >>>>>")
+    logger.info(f"Requête reçue pour user_id: {current_user_id} (authentifié) et scenario_id: {request.scenario_id}")
 
     if not request.scenario_id:
         raise HTTPException(
@@ -68,65 +69,91 @@ async def start_session(
             detail="Le champ 'scenario_id' est obligatoire."
         )
 
-    # Construire le chemin vers le fichier JSON du scénario
-    # Chemin relatif depuis ce fichier (app/routes/session.py) vers examples/
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    scenario_filename = f"scenario_{request.scenario_id}.json" # Hypothèse: scenario_id correspond au nom du fichier
-    scenario_path = os.path.join(base_dir, "examples", scenario_filename)
-    
-    logger.info(f"Vérification de l'existence du scénario : {scenario_path}")
+    scenario_template_db = None
+    initial_prompt_text = None
+    scenario_source = None
 
-    if not os.path.exists(scenario_path):
-        logger.warning(f"Scénario non trouvé : {scenario_path}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Scénario '{request.scenario_id}' non trouvé."
-        )
-
-    # Charger le message initial depuis le fichier JSON
+    # 1. Essayer de charger le ScenarioTemplate depuis la DB
     try:
-        with open(scenario_path, "r", encoding="utf-8") as f:
-            scenario_data = json.load(f)
-            
-            # Chercher 'initial_prompt' et construire 'initial_message'
-            initial_prompt_text = scenario_data.get("initial_prompt")
-            if initial_prompt_text and isinstance(initial_prompt_text, str):
-                initial_message = {
-                    "text": initial_prompt_text,
-                    "audio_url": scenario_data.get("initial_audio_url", "") # Optionnel: si le JSON peut avoir un audio_url initial
-                }
-            else:
-                # Fallback ou erreur si 'initial_prompt' n'est pas trouvé ou n'est pas une chaîne
-                logger.error(f"Champ 'initial_prompt' manquant ou invalide dans {scenario_path}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Données de scénario invalides (initial_prompt) pour '{request.scenario_id}'."
-                )
+        stmt = select(ScenarioTemplate).where(ScenarioTemplate.id == request.scenario_id)
+        result = await db.execute(stmt)
+        scenario_template_db = result.scalar_one_or_none()
+        if scenario_template_db and scenario_template_db.initial_prompt:
+            initial_prompt_text = scenario_template_db.initial_prompt
+            scenario_source = "database"
+            logger.info(f"Scénario '{request.scenario_id}' trouvé dans la base de données.")
+    except Exception as e_db:
+        logger.error(f"Erreur lors de la recherche du scénario '{request.scenario_id}' en DB: {e_db}", exc_info=True)
+        # Ne pas lever d'exception ici, on va essayer de charger depuis un fichier
 
-    except json.JSONDecodeError:
-        logger.error(f"Erreur de décodage JSON pour le scénario: {scenario_path}")
+    # 2. Si non trouvé en DB, essayer de charger depuis un fichier JSON
+    if not scenario_template_db:
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        scenario_filename = f"scenario_{request.scenario_id}.json"
+        scenario_path = os.path.join(base_dir, "examples", scenario_filename)
+        logger.info(f"Scénario non trouvé en DB. Tentative de chargement depuis fichier: {scenario_path}")
+
+        if os.path.exists(scenario_path):
+            try:
+                with open(scenario_path, "r", encoding="utf-8") as f:
+                    scenario_data_file = json.load(f)
+                    initial_prompt_text = scenario_data_file.get("initial_prompt")
+                    scenario_source = "file"
+                    logger.info(f"Scénario '{request.scenario_id}' trouvé dans le fichier JSON.")
+            except json.JSONDecodeError:
+                logger.error(f"Erreur de décodage JSON pour le scénario fichier: {scenario_path}")
+            except Exception as e_file:
+                logger.error(f"Erreur inattendue lors du chargement du scénario fichier {scenario_path}: {e_file}", exc_info=True)
+        else:
+            logger.warning(f"Scénario '{request.scenario_id}' non trouvé en DB ni en fichier ({scenario_path}).")
+
+    # 3. Valider que initial_prompt_text a été trouvé
+    if not initial_prompt_text or not isinstance(initial_prompt_text, str):
+        logger.error(f"Impossible de déterminer initial_prompt pour scenario_id '{request.scenario_id}' (source: {scenario_source})")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, # Ou 500 si on considère que le scénario devrait exister
+            detail=f"Données de scénario invalides ou scénario non trouvé pour '{request.scenario_id}'."
+        )
+    
+    initial_message = {
+        "text": initial_prompt_text,
+        "audio_url": "" # TODO: Gérer initial_audio_url si présent dans scenario_template_db ou scenario_data_file
+    }
+
+    # 4. Générer un ID de session et l'URL WebSocket
+    session_id_uuid = uuid.uuid4()
+    session_id_str = str(session_id_uuid)
+    websocket_url = f"/ws/{session_id_str}"
+
+    # 5. Créer l'enregistrement CoachingSession en base de données
+    try:
+        new_session_db = CoachingSession(
+            id=session_id_uuid,
+            user_id=current_user_id, # Utilise l'ID de l'utilisateur authentifié
+            scenario_template_id=request.scenario_id,
+            language=request.language or "fr",
+            goal=request.goal,
+            status="started", # ou "active"
+            created_at=datetime.utcnow(),
+            current_scenario_state={} # État initial vide ou défini
+        )
+        db.add(new_session_db)
+        await db.commit()
+        await db.refresh(new_session_db)
+        logger.info(f"CoachingSession créée en DB avec ID: {session_id_str} pour scenario: {request.scenario_id}")
+    except Exception as e_create_session:
+        logger.error(f"Erreur lors de la création de CoachingSession en DB pour scenario '{request.scenario_id}': {e_create_session}", exc_info=True)
+        # Annuler la transaction si quelque chose s'est mal passé
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Impossible de lire les données du scénario '{request.scenario_id}'."
-        )
-    except Exception as e:
-        logger.error(f"Erreur inattendue lors du chargement du scénario {scenario_path}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erreur serveur lors du chargement du scénario '{request.scenario_id}'."
+            detail="Erreur interne lors de la création de la session."
         )
 
-    # Générer un ID de session et l'URL WebSocket
-    session_id = str(uuid.uuid4())
-    websocket_url = f"/ws/{session_id}" # URL relative pour le WebSocket
-
-    logger.info(f"Session démarrée avec succès : id={session_id}, scenario={request.scenario_id}")
-
-    # TODO: Ajouter ici la logique pour créer la session dans la base de données
-    # et potentiellement initialiser l'orchestrateur si nécessaire.
+    logger.info(f"Session démarrée avec succès : id={session_id_str}, scenario={request.scenario_id}, source={scenario_source}")
 
     return SessionStartResponse(
-        session_id=session_id,
+        session_id=session_id_str,
         websocket_url=websocket_url,
         initial_message=initial_message
     )
