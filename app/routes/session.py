@@ -223,7 +223,7 @@ async def get_session_feedback(
                 "fluency_metrics": kaldi.fluency_metrics,
                 "lexical_metrics": kaldi.lexical_metrics,
                 "prosody_metrics": kaldi.prosody_metrics,
-                "personalized_feedback": kaldi.personalized_feedback # Si ce champ existe et est pertinent
+                "personalized_feedback": kaldi.personalized_feedback if hasattr(kaldi, 'personalized_feedback') else None
             }
         }
         feedback_results_list.append(feedback_item)
