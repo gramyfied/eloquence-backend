@@ -269,4 +269,5 @@ async def test_end_session_successfully_v2( # Renommage du test
     assert mock_session.ended_at is not None
 
     # Vérifier l'appel sur le mock direct de la méthode
-    mock_orchestrator_end_session.assert_awaited_once_with(session_id)
+    # Correction: S'attendre à l'appel avec l'argument nommé session_id
+    mock_orchestrator_end_session.assert_awaited_once_with(session_id=session_id)
