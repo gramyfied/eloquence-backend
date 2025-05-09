@@ -155,7 +155,7 @@ async def test_get_feedback_with_segment_id_filter(client: httpx.AsyncClient, as
     data_fb = response_fb.json()
     assert len(data_fb["feedback_results"]) == 1
     assert data_fb["feedback_results"][0]["turn_number"] == 1
-    assert data_fb["feedback_results"][0]["segment_id"] == str(feedback_id_1)
+    assert data_fb["feedback_results"][0]["segment_id"] == str(turn_id_1) # Correction: comparer avec turn_id_1
 
 @pytest.mark.asyncio
 # Utiliser les nouvelles fixtures client: httpx.AsyncClient et async_test_session: AsyncSession
