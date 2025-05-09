@@ -256,6 +256,7 @@ async def test_end_session_success(
 
     assert response.status_code == 200
     data = response.json()
+    print(f"DEBUG test_end_session_success: data received: {data}") # AJOUT POUR DEBUG
     assert data["message"] == "Session terminée avec succès"
     assert "final_summary" not in data
     assert data["final_summary_url"] is None
