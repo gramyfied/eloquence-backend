@@ -110,9 +110,11 @@ async def start_session(
     # 3. Valider que initial_prompt_text a été trouvé
     if not initial_prompt_text or not isinstance(initial_prompt_text, str):
         logger.error(f"Impossible de déterminer initial_prompt pour scenario_id '{request.scenario_id}' (source: {scenario_source})")
+        logger.error(f"Impossible de déterminer initial_prompt pour scenario_id '{request.scenario_id}' (source: {scenario_source})")
+        # Ajuster le message d'erreur pour correspondre à l'attente du test
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, # Ou 500 si on considère que le scénario devrait exister
-            detail=f"Données de scénario invalides ou scénario non trouvé pour '{request.scenario_id}'."
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scénario {request.scenario_id} non trouvé" # Message attendu par le test
         )
     
     initial_message = {
