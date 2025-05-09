@@ -132,7 +132,7 @@ async def start_session(
         new_session_db = CoachingSession(
             id=session_id_uuid,
             user_id=current_user_id, # Utilise l'ID de l'utilisateur authentifié
-            scenario_template_id=request.scenario_id,
+            scenario_template_id=scenario_template_db.id if scenario_template_db else None,
             language=request.language or "fr",
             goal=request.goal,
             status="started", # ou "active"
