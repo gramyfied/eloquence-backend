@@ -82,129 +82,46 @@ if settings.IS_TESTING:
             raise
 else:
     # Configuration pour la production (Supabase/PostgreSQL)
-    # Utiliser directement asyncpg au lieu de SQLAlchemy
+    logger.info("Mode production détecté: utilisation de PostgreSQL/asyncpg avec SQLAlchemy ORM")
     
-    # Variables pour stocker la connexion asyncpg
-    _pool = None
+    # Créer un moteur asynchrone pour PostgreSQL avec asyncpg
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,
+        future=True,
+        pool_size=10, # Ajuster la taille du pool selon les besoins
+        max_overflow=20,
+        pool_timeout=30,
+        connect_args={"server_settings": {"jit": "off"}} # Exemple d'optimisation pour PostgreSQL
+    )
     
-    # Fonction pour obtenir un pool de connexions asyncpg
-    async def get_pool():
-        global _pool
-        if _pool is None:
-            try:
-                # Extraire les informations de connexion de la chaîne DATABASE_URL
-                # Format: postgresql+asyncpg://username:password@host:port/database?param=value
-                url_parts = settings.DATABASE_URL.replace("postgresql+asyncpg://", "").split("@")
-                auth = url_parts[0].split(":")
-                username = auth[0]
-                password = auth[1]
-                
-                host_parts = url_parts[1].split("/")
-                host_port = host_parts[0].split(":")
-                host = host_port[0]
-                port = int(host_port[1]) if len(host_port) > 1 else 5432
-                
-                database = host_parts[1].split("?")[0]
-                
-                logger.info(f"Connexion à la base de données Supabase: {host}:{port}/{database}")
-                
-                # Créer un pool de connexions asyncpg avec statement_cache_size=0
-                _pool = await asyncpg.create_pool(
-                    user=username,
-                    password=password,
-                    host=host,
-                    port=port,
-                    database=database,
-                    statement_cache_size=0,  # Désactiver le cache des prepared statements
-                    max_size=10,
-                    min_size=1
-                )
-                
-                logger.info("✅ Pool de connexions asyncpg créé avec succès")
-            except Exception as e:
-                logger.error(f"❌ Erreur lors de la création du pool de connexions asyncpg: {e}")
-                raise
-        
-        return _pool
+    # Créer une fabrique de sessions asynchrones
+    async_session_factory = sessionmaker(
+        engine, 
+        class_=AsyncSession, 
+        expire_on_commit=False,
+        autoflush=False
+    )
     
-    # Classe pour encapsuler un résultat de requête asyncpg
-    class AsyncpgResult:
-        def __init__(self, rows):
-            self.rows = rows
-        
-        async def fetchall(self):
-            """Retourne toutes les lignes du résultat"""
-            return self.rows
-        
-        async def fetchone(self):
-            """Retourne la première ligne du résultat ou None"""
-            return self.rows[0] if self.rows else None
-        
-        async def scalar_one_or_none(self):
-            """Retourne la première valeur de la première ligne ou None"""
-            if not self.rows:
-                return None
-            return self.rows[0][0] if self.rows[0] else None
-        
-        async def scalars(self):
-            """Retourne un objet qui a une méthode all() qui retourne toutes les premières valeurs de chaque ligne"""
-            class ScalarsResult:
-                def __init__(self, rows):
-                    self.rows = rows
-                
-                def all(self):
-                    return [row[0] for row in self.rows] if self.rows else []
-                
-                def unique(self):
-                    return self
-            
-            return ScalarsResult(self.rows)
-    
-    # Classe pour encapsuler une connexion asyncpg
-    class AsyncpgConnection:
-        def __init__(self, connection):
-            self.connection = connection
-        
-        async def execute(self, query, params=None):
-            """Exécute une requête SQL et retourne le résultat encapsulé"""
-            try:
-                if params:
-                    # Vérifier si params est une liste ou un dictionnaire
-                    if isinstance(params, list):
-                        rows = await self.connection.fetch(query, *params)
-                    else:
-                        rows = await self.connection.fetch(query, *params.values())
-                else:
-                    rows = await self.connection.fetch(query)
-                
-                # Encapsuler le résultat dans un objet AsyncpgResult
-                return AsyncpgResult(rows)
-            except Exception as e:
-                logger.error(f"❌ Erreur lors de l'exécution de la requête: {e}")
-                raise
-        
-        async def close(self):
-            """Libère la connexion"""
-            await self.connection.close()
-        
-        async def commit(self):
-            """Commit la transaction"""
-            # asyncpg gère automatiquement les transactions
-            pass
-    
-    # Fonction pour obtenir une connexion asyncpg
+    # Fonction pour obtenir une session de base de données asynchrone
     async def get_db():
-        pool = await get_pool()
-        connection = await pool.acquire()
+        session = async_session_factory()
         try:
-            yield AsyncpgConnection(connection)
+            yield session
         finally:
-            await pool.release(connection)
+            await session.close()
     
-    # Fonction factice pour compatibilité
+    # Fonction factice pour compatibilité (si get_sync_db est utilisé ailleurs)
     def get_sync_db():
+        # En mode asynchrone, l'utilisation d'une session synchrone n'est pas recommandée.
+        # Retourner une session factice ou lever une erreur si cette fonction est appelée.
+        logger.warning("get_sync_db appelé en mode asynchrone. Utiliser get_db à la place.")
         class DummySession:
             def close(self):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
                 pass
         
         session = DummySession()
@@ -213,16 +130,16 @@ else:
         finally:
             session.close()
     
-    # Fonction pour initialiser la base de données
+    # Fonction pour initialiser la base de données (créer les tables)
     async def init_db():
         """
-        Initialise la base de données en vérifiant la connexion.
+        Initialise la base de données en créant toutes les tables définies dans les modèles.
         """
         try:
-            pool = await get_pool()
-            async with pool.acquire() as conn:
-                # Vérifier la connexion
-                await conn.execute("SELECT 1")
+            async with engine.begin() as conn:
+                # Utiliser run_sync pour exécuter des opérations synchrones (comme create_all)
+                # dans un contexte asynchrone
+                await conn.run_sync(Base.metadata.create_all)
             
             logger.info("✅ Base de données initialisée avec succès")
         except Exception as e:
