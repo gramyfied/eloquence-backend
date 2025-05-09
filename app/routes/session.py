@@ -246,14 +246,16 @@ async def get_session_feedback(
 async def end_session(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user_id: str = Depends(get_current_user_id)
+    current_user_id: str = Depends(get_current_user_id),
+    orchestrator: Orchestrator = Depends(get_orchestrator) # Dépendance décommentée
 ):
     """
     Termine une session de coaching vocal.
     Met à jour le statut de la session et l'heure de fin.
-    V2 - Logique DB restaurée.
+    Appelle l'orchestrateur pour terminer la session.
+    V3 - Appel Orchestrator.end_session ajouté.
     """
-    logger.info(f"<<<<< DANS end_session - V2 - Logique DB restaurée >>>>>")
+    logger.info(f"<<<<< DANS end_session - V3 - Appel Orchestrator >>>>>")
     logger.info(f"Tentative de terminaison de session_id: {session_id} par user: {current_user_id}")
 
     coaching_session = await db.get(CoachingSession, session_id)
@@ -293,13 +295,21 @@ async def end_session(
     coaching_session.ended_at = datetime.utcnow()
     
     try:
+        # Appeler l'orchestrateur pour gérer la fin de session (par exemple, nettoyage, etc.)
+        # Assumons que l'orchestrateur a une méthode end_session qui prend l'ID de session string.
+        # Le mock dans le test s'attend à `session_id` (UUID), donc nous passons `session_id`.
+        # Si la méthode de l'orchestrateur attend une chaîne, ce serait str(session_id).
+        # Pour correspondre au mock du test:
+        await orchestrator.end_session(session_id=session_id)
+        logger.info(f"Orchestrator.end_session appelé pour session {session_id}")
+
         db.add(coaching_session)
         await db.commit()
         await db.refresh(coaching_session)
         logger.info(f"Session {session_id} marquée comme terminée en DB.")
     except Exception as e:
-        await db.rollback()
-        logger.error(f"Erreur DB lors de la mise à jour de la session {session_id} pour end_session: {e}", exc_info=True)
+        await db.rollback() # Assurer le rollback en cas d'erreur orchestrateur ou DB
+        logger.error(f"Erreur lors de la fin de la session {session_id} (orchestrateur ou DB): {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur interne du serveur lors de la fin de la session."

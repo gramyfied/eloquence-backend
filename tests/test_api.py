@@ -241,8 +241,7 @@ async def test_end_session_success(
     session_id = uuid.uuid4()
 
     participant_id = uuid.uuid4()
-    # mock_session = CoachingSession(id=session_id, user_id=user_id, status="active") # <-- status retiré
-    mock_session = CoachingSession(id=session_id, user_id=user_id) # <-- status retiré
+    mock_session = CoachingSession(id=session_id, user_id=user_id, status="active") # <-- Statut défini à "active"
     mock_participant = Participant(id=participant_id, session_id=session_id, name="Test User", role="user")
     mock_turn_1 = SessionTurn(id=uuid.uuid4(), session_id=session_id, participant_id=participant_id, turn_number=1, role="user")
     mock_turn_2 = SessionTurn(id=uuid.uuid4(), session_id=session_id, participant_id=participant_id, turn_number=2, role="assistant")
@@ -258,13 +257,13 @@ async def test_end_session_success(
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "Session terminée avec succès"
-    assert "final_summary" not in data # <-- Vérifier que la clé n'est PAS présente
-    assert data["final_summary_url"] is None # Vérifier la valeur par défaut
+    assert "final_summary" not in data
+    assert data["final_summary_url"] is None
 
     # Vérifier que la session est terminée en DB
     await db.refresh(mock_session) # Recharger depuis la DB
-    # assert mock_session.status == "ended" # Le modèle n'a pas de champ status
-    assert mock_session.ended_at is not None # Vérifier que ended_at est défini
+    assert mock_session.status == "ended" # <-- Décommenté et vérifié
+    assert mock_session.ended_at is not None
 
     # Vérifier l'appel sur le mock direct de la méthode
     mock_orchestrator_end_session.assert_awaited_once_with(session_id)
