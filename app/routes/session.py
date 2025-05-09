@@ -87,15 +87,21 @@ async def start_session(
     try:
         with open(scenario_path, "r", encoding="utf-8") as f:
             scenario_data = json.load(f)
-            initial_message = scenario_data.get("initial_message")
-            if not initial_message or not isinstance(initial_message, dict) or "text" not in initial_message:
-                 logger.error(f"Format 'initial_message' invalide dans {scenario_path}")
-                 raise HTTPException(
-                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                     detail=f"Données de scénario invalides pour '{request.scenario_id}'."
-                 )
-            # Assurer que audio_url est présent, même si vide
-            initial_message.setdefault("audio_url", "")
+            
+            # Chercher 'initial_prompt' et construire 'initial_message'
+            initial_prompt_text = scenario_data.get("initial_prompt")
+            if initial_prompt_text and isinstance(initial_prompt_text, str):
+                initial_message = {
+                    "text": initial_prompt_text,
+                    "audio_url": scenario_data.get("initial_audio_url", "") # Optionnel: si le JSON peut avoir un audio_url initial
+                }
+            else:
+                # Fallback ou erreur si 'initial_prompt' n'est pas trouvé ou n'est pas une chaîne
+                logger.error(f"Champ 'initial_prompt' manquant ou invalide dans {scenario_path}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Données de scénario invalides (initial_prompt) pour '{request.scenario_id}'."
+                )
 
     except json.JSONDecodeError:
         logger.error(f"Erreur de décodage JSON pour le scénario: {scenario_path}")
