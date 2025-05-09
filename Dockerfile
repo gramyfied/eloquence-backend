@@ -36,4 +36,4 @@ RUN mkdir -p /app/data/audio /app/data/feedback /app/data/models /app/logs
 EXPOSE 8000
 
 # Commande par défaut avec timeouts WebSocket augmentés
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--websocket-ping-interval", "60", "--websocket-ping-timeout", "300"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ws-ping-interval", "60", "--ws-ping-timeout", "300"]
