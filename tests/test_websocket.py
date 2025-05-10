@@ -27,28 +27,51 @@ def mock_orchestrator(mocker: MagicMock) -> AsyncMock:
     # Créer un mock de l'orchestrateur
     mock_instance = AsyncMock(spec=Orchestrator)
     
-    # Configurer les méthodes mockées
+    # Configurer les méthodes mockées pour qu'elles fonctionnent correctement
+    # avec les tests WebSocket de Starlette
+    
+    # Remplacer la méthode connect_client pour qu'elle accepte la connexion
+    # et stocke le websocket dans connected_clients
     async def mock_connect_client(websocket, session_id):
-        # Accepter la connexion WebSocket
         await websocket.accept()
+        mock_instance.connected_clients = {session_id: websocket}
         return
-        
+    
+    # Remplacer la méthode process_websocket_message pour qu'elle traite
+    # les messages et envoie une réponse
     async def mock_process_websocket_message(websocket, session_id):
-        # Ne rien faire
-        return
+        message = await websocket.receive()
         
+        if "bytes" in message:
+            # Message binaire (audio)
+            await websocket.send_bytes(b"Received audio chunk")
+        elif "text" in message:
+            # Message texte (contrôle)
+            await websocket.send_text("Received text message")
+        
+        return
+    
+    # Remplacer la méthode disconnect_client
     async def mock_disconnect_client(session_id):
-        # Ne rien faire
+        if hasattr(mock_instance, 'connected_clients') and session_id in mock_instance.connected_clients:
+            del mock_instance.connected_clients[session_id]
         return
-        
+    
     # Assigner les mocks aux méthodes
     mock_instance.connect_client.side_effect = mock_connect_client
     mock_instance.process_websocket_message.side_effect = mock_process_websocket_message
     mock_instance.disconnect_client.side_effect = mock_disconnect_client
     mock_instance.initialize = AsyncMock()
+    mock_instance.connected_clients = {}
     
-    # Patcher la dépendance dans le module où elle est utilisée
-    mocker.patch("app.routes.websocket.get_orchestrator", return_value=mock_instance)
+    # Patcher directement l'instance de l'orchestrateur dans le module
+    mocker.patch("app.routes.websocket.orchestrator", mock_instance)
+    
+    # Patcher la fonction get_orchestrator pour qu'elle retourne notre mock
+    async def mock_get_orchestrator(*args, **kwargs):
+        return mock_instance
+    
+    mocker.patch("app.routes.websocket.get_orchestrator", side_effect=mock_get_orchestrator)
     
     return mock_instance
 
@@ -56,8 +79,18 @@ def mock_orchestrator(mocker: MagicMock) -> AsyncMock:
 def mock_db_session(mocker: MagicMock) -> MagicMock:
     """Fixture pour mocker la session de base de données asynchrone."""
     mock_session = MagicMock(spec=AsyncSession)
-    # Patcher la dépendance get_db
-    mocker.patch("app.routes.websocket.get_db", return_value=mock_session)
+    
+    # Patcher la dépendance get_db avec une fonction asynchrone
+    async def mock_get_db():
+        return mock_session
+    
+    mocker.patch("app.routes.websocket.get_db", side_effect=mock_get_db)
+    
+    # Créer une fonction factice pour les opérations de base de données
+    mock_session.execute = AsyncMock()
+    mock_session.commit = AsyncMock()
+    mock_session.refresh = AsyncMock()
+    
     return mock_session
 
 # --- Tests --- 
@@ -76,29 +109,23 @@ def test_websocket_connection_success(
     """Teste la connexion WebSocket réussie et l'appel à connect_client."""
     session_id = str(uuid.uuid4())
     
+    # Utiliser le client WebSocket de Starlette pour se connecter
     with client.websocket_connect(f"/ws/{session_id}") as websocket:
-        # Vérifier que connect_client a été appelé après la connexion
-        # L'appel se produit dans le contexte de l'endpoint, pas immédiatement ici.
-        # On vérifie après la déconnexion ou on ajoute un sleep si nécessaire.
-        pass # La connexion est établie
-
-    # L'appel à connect_client devrait se produire à l'intérieur de l'endpoint
-    # et disconnect_client à la fin. Vérifions les appels après la fermeture.
-    # Note: L'ordre exact peut dépendre de l'implémentation de l'endpoint.
-    # Si connect_client est appelé avant le yield/accept, il faut le vérifier différemment.
-    # Supposons qu'il est appelé après accept().
+        # Envoyer un message pour vérifier que la connexion est établie
+        websocket.send_text("Hello")
+        
+        # Recevoir la réponse
+        response = websocket.receive_text()
+        assert response == "Received text message"
     
-    # Donner un peu de temps au serveur de test pour traiter la connexion/déconnexion
-    # asyncio.sleep n'est pas idéal, mais nécessaire avec TestClient parfois.
-    # Une alternative serait de mocker l'orchestrateur pour qu'il signale la fin.
-    asyncio.run(asyncio.sleep(0.05)) # Exécuter sleep dans une boucle d'événements
-
+    # Vérifier que connect_client a été appelé
     mock_orchestrator.connect_client.assert_awaited_once()
-    args, kwargs = mock_orchestrator.connect_client.call_args
-    # Le premier argument est l'objet WebSocket, le second est session_id
-    assert isinstance(args[0], MagicMock) # Ou le type réel si non mocké
-    assert args[1] == session_id
-    # disconnect_client est testé séparément
+    
+    # Vérifier que process_websocket_message a été appelé
+    mock_orchestrator.process_websocket_message.assert_awaited_once()
+    
+    # Vérifier que disconnect_client a été appelé
+    mock_orchestrator.disconnect_client.assert_awaited_once_with(session_id)
 
 def test_websocket_receive_audio(
     client: TestClient, 
@@ -110,9 +137,12 @@ def test_websocket_receive_audio(
     audio_chunk = b"\x01\x02\x03\x04"
     
     with client.websocket_connect(f"/ws/{session_id}") as websocket:
+        # Envoyer un chunk audio
         websocket.send_bytes(audio_chunk)
-        # Attendre que le message soit traité par l'endpoint
-        asyncio.run(asyncio.sleep(0.05))
+        
+        # Recevoir la réponse
+        response = websocket.receive_bytes()
+        assert response == b"Received audio chunk"
         
         # Vérifier que process_websocket_message a été appelé
         mock_orchestrator.process_websocket_message.assert_awaited_once()
@@ -128,8 +158,12 @@ def test_websocket_receive_control_message(
     control_message_str = json.dumps(control_message)
     
     with client.websocket_connect(f"/ws/{session_id}") as websocket:
-        websocket.send_text(control_message_str) # Envoyer comme texte JSON
-        asyncio.run(asyncio.sleep(0.05))
+        # Envoyer un message de contrôle
+        websocket.send_text(control_message_str)
+        
+        # Recevoir la réponse
+        response = websocket.receive_text()
+        assert response == "Received text message"
         
         # Vérifier que process_websocket_message a été appelé
         mock_orchestrator.process_websocket_message.assert_awaited_once()
@@ -143,13 +177,14 @@ def test_websocket_disconnect(
     session_id = str(uuid.uuid4())
     
     with client.websocket_connect(f"/ws/{session_id}") as websocket:
-        # Simuler une activité si nécessaire
+        # Simuler une activité
         websocket.send_text("hello")
-        asyncio.run(asyncio.sleep(0.01))
+        
+        # Recevoir la réponse
+        response = websocket.receive_text()
+        assert response == "Received text message"
+        
         # La déconnexion se produit à la sortie du bloc 'with'
-    
-    # Attendre que la déconnexion soit traitée
-    asyncio.run(asyncio.sleep(0.05))
     
     # Vérifier que disconnect_client a été appelé
     mock_orchestrator.disconnect_client.assert_awaited_once_with(session_id)
@@ -164,12 +199,15 @@ def test_websocket_receive_invalid_json(
     invalid_json_text = "this is not json"
     
     with client.websocket_connect(f"/ws/{session_id}") as websocket:
+        # Envoyer un texte qui n'est pas du JSON valide
         websocket.send_text(invalid_json_text)
-        asyncio.run(asyncio.sleep(0.05))
+        
+        # Recevoir la réponse
+        response = websocket.receive_text()
+        assert response == "Received text message"
         
         # Vérifier que process_websocket_message a été appelé
         mock_orchestrator.process_websocket_message.assert_awaited_once()
-        # L'orchestrateur est responsable de gérer le JSON invalide
 
 # Test pour simuler une erreur dans l'orchestrateur lors du traitement
 # Cela nécessite que l'endpoint WebSocket gère correctement les exceptions
@@ -187,24 +225,20 @@ def test_websocket_orchestrator_error_handling(
     mock_orchestrator.process_websocket_message.side_effect = Exception("Orchestrator Error")
     
     with client.websocket_connect(f"/ws/{session_id}") as websocket:
+        # Envoyer un message qui va déclencher une erreur
         websocket.send_bytes(audio_chunk)
-        asyncio.run(asyncio.sleep(0.05))
         
-        # Vérifier que process_websocket_message a été appelé
-        mock_orchestrator.process_websocket_message.assert_awaited_once()
+        # L'erreur devrait être gérée par l'endpoint et ne pas fermer la connexion
+        # Nous devrions pouvoir envoyer un autre message
+        websocket.send_text("test after error")
         
-        # Idéalement, la connexion ne devrait pas se fermer immédiatement
-        # et l'endpoint devrait attraper l'exception et peut-être logger.
-        # On peut vérifier qu'aucun message d'erreur inattendu n'est reçu.
-        try:
-            # Essayer de recevoir un message (devrait timeout ou être vide si l'erreur est gérée silencieusement)
-            # Note: TestClient ne gère pas bien les timeouts de réception.
-            # On suppose ici que l'erreur est loggée côté serveur et que la connexion reste ouverte.
-            pass 
-        except WebSocketDisconnect:
-            pytest.fail("WebSocket disconnected unexpectedly on orchestrator error")
-
-    # Vérifier que disconnect est appelé normalement à la fin
-    asyncio.run(asyncio.sleep(0.05))
+        # Recevoir la réponse au second message
+        response = websocket.receive_text()
+        assert response == "Received text message"
+    
+    # Vérifier que process_websocket_message a été appelé deux fois
+    assert mock_orchestrator.process_websocket_message.await_count == 2
+    
+    # Vérifier que disconnect_client a été appelé
     mock_orchestrator.disconnect_client.assert_awaited_once_with(session_id)
 
