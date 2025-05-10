@@ -49,6 +49,8 @@ SESSION_STATE_USER_SPEAKING = "user_speaking"  # L'utilisateur parle
 SESSION_STATE_PROCESSING = "processing"  # Traitement de l'entrée utilisateur
 SESSION_STATE_IA_SPEAKING = "ia_speaking"  # L'IA parle
 SESSION_STATE_ENDED = "ended"  # Session terminée
+SESSION_STATE_PAUSED = "paused"  # Session en pause (déconnexion temporaire)
+SESSION_STATE_ENDED = "ended"  # Session terminée
 
 class Orchestrator:
     """
@@ -99,19 +101,112 @@ class Orchestrator:
                 "is_interrupted": False,
                 "scenario_context": None,
                 "segment_id": None,
-                "start_time": time.time()
+                "start_time": time.time(),
+                "is_paused": False,
+                "paused_at": None,
+                "reconnect_count": 0,
+                "last_activity": time.time()
             }
-            logger.info(f"Nouvelle session initialisée: {session_id}")
+            logger.info(f"[WS] Nouvelle session initialisée: {session_id}")
         else:
-            logger.info(f"Client reconnecté à la session: {session_id}")
+            # Client reconnecté à une session existante
+            session = self.active_sessions[session_id]
+            
+            # Vérifier si la session était en pause
+            if session.get("is_paused", False):
+                # Calculer la durée de la pause
+                pause_duration = time.time() - session.get("paused_at", time.time())
+                
+                # Réactiver la session
+                session["is_paused"] = False
+                session["paused_at"] = None
+                session["reconnect_count"] = session.get("reconnect_count", 0) + 1
+                session["last_activity"] = time.time()
+                
+                logger.info(f"[WS] Client reconnecté à la session {session_id} après "
+                           f"{pause_duration:.1f}s de pause (reconnexion #{session['reconnect_count']})")
+                
+                # Envoyer un message de bienvenue pour confirmer la reconnexion
+                await self._send_message(session_id, {
+                    "type": WS_MSG_CONTROL,
+                    "event": "session_resumed",
+                    "pause_duration": round(pause_duration, 1),
+                    "reconnect_count": session["reconnect_count"]
+                })
+            else:
+                # Session active, simple reconnexion
+                session["reconnect_count"] = session.get("reconnect_count", 0) + 1
+                session["last_activity"] = time.time()
+                logger.info(f"[WS] Client reconnecté à la session active {session_id} "
+                           f"(reconnexion #{session['reconnect_count']})")
     
     async def disconnect_client(self, session_id: str):
         """
-        Gère la déconnexion d'un client WebSocket.
+        Gère la déconnexion d'un client WebSocket et nettoie la session.
         """
+        logger.info(f"[WS] Déconnexion complète du client pour session {session_id}")
+        
+        # Supprimer le client de la liste des clients connectés
         if session_id in self.connected_clients:
             del self.connected_clients[session_id]
-            logger.info(f"Client déconnecté de la session: {session_id}")
+            logger.info(f"[WS] Client supprimé de la liste des clients connectés")
+        else:
+            logger.warning(f"[WS] Client non trouvé dans la liste des clients connectés")
+        
+        # Nettoyer la session active
+        if session_id in self.active_sessions:
+            # Sauvegarder les données de session avant de la supprimer
+            try:
+                await self._save_session_data(session_id)
+                logger.info(f"[WS] Données de session {session_id} sauvegardées avant suppression")
+            except Exception as e:
+                logger.error(f"[WS] Erreur lors de la sauvegarde des données de session avant suppression: {e}",
+                            exc_info=True)
+            
+            # Supprimer la session
+            del self.active_sessions[session_id]
+            logger.info(f"[WS] Session {session_id} supprimée de la liste des sessions actives")
+        else:
+            logger.warning(f"[WS] Session {session_id} non trouvée dans la liste des sessions actives")
+    
+    async def client_disconnected(self, session_id: str, keep_session: bool = False):
+        """
+        Gère la déconnexion d'un client WebSocket.
+        
+        Args:
+            session_id: ID de la session
+            keep_session: Si True, conserve l'état de la session pour une reconnexion ultérieure
+        """
+        logger.info(f"[WS] Déconnexion du client pour session {session_id}, keep_session={keep_session}")
+        
+        # Supprimer le client de la liste des clients connectés
+        if session_id in self.connected_clients:
+            del self.connected_clients[session_id]
+            logger.info(f"[WS] Client supprimé de la liste des clients connectés")
+        else:
+            logger.warning(f"[WS] Client non trouvé dans la liste des clients connectés")
+        
+        # Si on ne garde pas la session, la nettoyer
+        if not keep_session:
+            await self.disconnect_client(session_id)
+            return
+        
+        # Sinon, conserver la session mais mettre à jour son état
+        if session_id in self.active_sessions:
+            # Mettre la session en pause
+            self.active_sessions[session_id]["state"] = SESSION_STATE_IDLE
+            self.active_sessions[session_id]["is_paused"] = True
+            self.active_sessions[session_id]["paused_at"] = time.time()
+            
+            # Sauvegarder les données de session
+            try:
+                await self._save_session_data(session_id)
+                logger.info(f"[WS] Données de session {session_id} sauvegardées et mise en pause")
+            except Exception as e:
+                logger.error(f"[WS] Erreur lors de la sauvegarde des données de session en pause: {e}",
+                            exc_info=True)
+        else:
+            logger.warning(f"[WS] Session {session_id} non trouvée pour mise en pause")
     
     async def end_session(self, session_id: str):
         """
@@ -171,13 +266,17 @@ class Orchestrator:
         Traite un chunk audio reçu du client.
         Utilise le VAD pour détecter la parole et déclenche le traitement approprié.
         """
-        logger.info(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
+        logger.info(f"[AUDIO] _process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
         session = self.active_sessions.get(session_id)
         if not session:
-            logger.error(f"Session {session_id} non trouvée")
+            logger.error(f"[AUDIO] Session {session_id} non trouvée")
             return
         
-        logger.info(f"État de la session {session_id} au début de _process_audio_chunk: {session['state']}")
+        # Log détaillé de l'état de la session
+        logger.info(f"[AUDIO] État de la session {session_id}: état={session['state']}, "
+                   f"speech_detected={session.get('speech_detected', False)}, "
+                   f"silence_duration={session.get('silence_duration', 0):.2f}s, "
+                   f"is_interrupted={session.get('is_interrupted', False)}")
 
         # Si l'IA est en train de parler et qu'on reçoit de l'audio, c'est une interruption
         if session["state"] == SESSION_STATE_IA_SPEAKING and not session["is_interrupted"]:
@@ -203,7 +302,8 @@ class Orchestrator:
         is_speech = vad_result["is_speech"]
         confidence = vad_result["confidence"]
         
-        logger.debug(f"Résultat VAD: speech_prob={speech_prob:.2f}, is_speech={is_speech}, confidence={confidence:.2f}")
+        # Log détaillé du résultat VAD
+        logger.info(f"[VAD] Résultat: speech_prob={speech_prob:.2f}, is_speech={is_speech}, confidence={confidence:.2f}")
 
         if speech_prob is not None:
             current_time = time.time()
@@ -303,15 +403,20 @@ class Orchestrator:
         vad_to_asr_time = time.time()
         # Utiliser la langue de la session ou "fr" par défaut
         language = "fr"  # Langue par défaut
+        
+        # Log détaillé avant l'appel à ASR
+        logger.info(f"[ASR] Début de la transcription pour session {session_id}, taille audio: {len(audio_data)} bytes")
         transcription = await self.asr_service.transcribe(audio_data, language)
         asr_time = time.time()
+        asr_duration = asr_time - vad_to_asr_time
         
         if not transcription:
-            logger.warning("Transcription ASR vide, abandon du traitement")
+            logger.warning(f"[ASR] Transcription vide pour session {session_id}, abandon du traitement")
             session["state"] = SESSION_STATE_IDLE
             return
         
-        logger.info(f"Transcription ASR: {transcription}")
+        # Log détaillé après l'appel à ASR
+        logger.info(f"[ASR] Transcription réussie en {asr_duration:.2f}s: '{transcription}'")
         
         # Sauvegarder la transcription
         transcript_path = os.path.join(settings.AUDIO_STORAGE_PATH, f"{session_id}_{segment_id}.txt")
@@ -323,6 +428,14 @@ class Orchestrator:
         
         # Générer la réponse LLM
         is_interrupted = session["is_interrupted"]
+        
+        # Log détaillé avant l'appel au LLM
+        history_length = len(session["history"])
+        logger.info(f"[LLM] Début de la génération pour session {session_id}, "
+                   f"historique: {history_length} messages, "
+                   f"is_interrupted: {is_interrupted}")
+        
+        llm_start_time = time.time()
         llm_response = await self.llm_service.generate(
             session["history"],
             is_interrupted=is_interrupted,
@@ -330,6 +443,12 @@ class Orchestrator:
             session_id=session_id
         )
         llm_time = time.time()
+        llm_duration = llm_time - llm_start_time
+        
+        # Log détaillé après l'appel au LLM
+        logger.info(f"[LLM] Génération réussie en {llm_duration:.2f}s, "
+                   f"longueur réponse: {len(llm_response['text_response'])} caractères, "
+                   f"émotion: {llm_response['emotion_label']}")
         
         # Réinitialiser le flag d'interruption
         session["is_interrupted"] = False
@@ -356,7 +475,11 @@ class Orchestrator:
             # Potentiellement ajouter d'autres logiques de mise à jour ici
         
         # Synthèse vocale TTS
-        logger.info(f"Synthèse TTS avec émotion: {emotion_label}")
+        logger.info(f"[TTS] Début de la synthèse pour session {session_id}, "
+                   f"émotion: {emotion_label}, "
+                   f"longueur texte: {len(text_response)} caractères")
+        
+        # Notification au client que l'IA commence à parler
         await self._send_message(session_id, {
             "type": WS_MSG_AUDIO_CONTROL,
             "event": AUDIO_IA_SPEECH_START
@@ -382,17 +505,32 @@ class Orchestrator:
         
         # Envoyer l'audio en streaming
         chunk_size = 4096  # Taille des chunks audio à envoyer
+        chunks_sent = 0
+        total_bytes_sent = 0
+        
+        # Log détaillé avant l'envoi des chunks audio
+        logger.info(f"[TTS] Début du streaming audio pour session {session_id}")
+        
         async for audio_chunk in audio_stream:
             # Vérifier si l'utilisateur a interrompu
             if session["is_interrupted"]:
-                logger.info("Streaming TTS interrompu par l'utilisateur")
+                logger.info(f"[TTS] Streaming interrompu par l'utilisateur après {chunks_sent} chunks")
                 break
             
             # Envoyer le chunk audio
             await self._send_binary(session_id, audio_chunk)
+            chunks_sent += 1
+            total_bytes_sent += len(audio_chunk)
+            
+            # Log périodique pendant le streaming (tous les 10 chunks)
+            if chunks_sent % 10 == 0:
+                logger.debug(f"[TTS] Progression streaming: {chunks_sent} chunks, {total_bytes_sent} bytes envoyés")
             
             # Petite pause pour simuler le streaming
             await asyncio.sleep(0.05)
+        
+        # Log détaillé après l'envoi des chunks audio
+        logger.info(f"[TTS] Fin du streaming audio: {chunks_sent} chunks, {total_bytes_sent} bytes envoyés")
         
         # Marquer la fin de la parole de l'IA
         if not session["is_interrupted"]:
@@ -631,7 +769,17 @@ class Orchestrator:
             try:
                 await websocket.send_bytes(data)
             except Exception as e:
-                logger.error(f"Erreur lors de l'envoi des données binaires: {e}", exc_info=True)
+                logger.error(f"[WS] Erreur lors de l'envoi des données binaires: {e}", exc_info=True)
+                # Notifier le client de l'erreur si possible via un autre canal
+                try:
+                    # Tenter d'envoyer un message d'erreur via le WebSocket
+                    # Cela pourrait échouer si le WebSocket est fermé
+                    await self._send_error(session_id, f"Erreur d'envoi audio: {str(e)}")
+                except:
+                    # Si cela échoue, logger l'erreur mais ne pas la propager
+                    logger.error(f"[WS] Impossible d'envoyer la notification d'erreur au client")
+        else:
+            logger.error(f"[WS] WebSocket non trouvé pour session_id={session_id} lors de l'envoi de données binaires")
     
     async def _send_error(self, session_id: str, error_message: str):
         """
