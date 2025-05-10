@@ -75,7 +75,7 @@ class LlmService:
                     if response.status != 200:
                         error_text = await response.text()
                         logger.error(f"Erreur LLM {response.status}: {error_text}")
-                        return {"text": f"Erreur du service LLM: {response.status}", "emotion": "neutre"}
+                        return {"text_response": f"Erreur du service LLM: {response.status}", "emotion_label": "neutre"}
                     
                     # Traiter la réponse
                     response_json = await response.json()
@@ -84,7 +84,7 @@ class LlmService:
                     content = response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
                     if not content:
                         logger.error(f"Format de réponse LLM inattendu: {response_json}")
-                        return {"text": "Erreur: format de réponse inattendu", "emotion": "neutre"}
+                        return {"text_response": "Erreur: format de réponse inattendu", "emotion_label": "neutre"}
                     
                     # Extraire l'émotion du texte (si présente)
                     emotion = "neutre"  # Valeur par défaut
@@ -100,10 +100,10 @@ class LlmService:
                                 content = content[:start_idx].strip() + content[end_idx + 1:].strip()
                                 break
                     
-                    return {"text": content, "emotion": emotion}
+                    return {"text_response": content, "emotion_label": emotion}
         except aiohttp.ClientError as e:
             logger.error(f"Erreur de connexion au service LLM: {e}")
-            return {"text": f"Erreur de connexion au service LLM: {str(e)}", "emotion": "neutre"}
+            return {"text_response": f"Erreur de connexion au service LLM: {str(e)}", "emotion_label": "neutre"}
         except Exception as e:
             logger.error(f"Erreur lors de la génération LLM: {e}")
-            return {"text": f"Erreur du service LLM: {str(e)}", "emotion": "neutre"}
+            return {"text_response": f"Erreur du service LLM: {str(e)}", "emotion_label": "neutre"}
