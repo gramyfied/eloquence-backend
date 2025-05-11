@@ -69,6 +69,10 @@ async def websocket_endpoint(
         # a le droit d'accéder à cette session
         
         # Accepter la connexion WebSocket
+        await websocket.accept()
+        logger.info(f"Connexion WebSocket acceptée manuellement pour session {session_id}")
+        
+        # Connecter le client à l'orchestrateur
         await orchestrator.connect_client(websocket, session_id)
         logger.info(f"Connexion WebSocket acceptée pour session {session_id}")
         
