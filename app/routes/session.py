@@ -112,7 +112,7 @@ async def start_session(
 
     # Générer un ID de session et l'URL WebSocket
     session_id = str(uuid.uuid4())
-    websocket_url = f"/ws/simple/{session_id}" # URL relative pour le WebSocket simplifié
+    websocket_url = f"/ws/{session_id}" # URL relative pour le WebSocket
 
     logger.info(f"Session démarrée avec succès : id={session_id}, scenario={request.scenario_id}")
 
