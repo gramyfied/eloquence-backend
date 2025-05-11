@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     VAD_SPEECH_PAD_MS: int = 400 # Padding ajouté avant/après la détection de parole
     VAD_CONSECUTIVE_SPEECH_FRAMES: int = 2 # Nombre de frames consécutives nécessaires pour confirmer la parole
     VAD_CONSECUTIVE_SILENCE_FRAMES: int = 3 # Nombre de frames consécutives nécessaires pour confirmer le silence
+    VAD_WINDOW_SIZE_SAMPLES: int = 512 # Taille de la fenêtre VAD en échantillons
 
     # Chemins de stockage
     AUDIO_STORAGE_PATH: str = "./data/audio"

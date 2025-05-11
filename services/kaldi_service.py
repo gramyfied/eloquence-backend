@@ -1016,5 +1016,124 @@ def run_kaldi_analysis(self, session_id: str, turn_id_str: str, audio_bytes: byt
             logger.warning(f"[Task {task_id}] Erreur lors du nettoyage des fichiers temporaires: {e}")
 
 
+# Fonctions de parsing Kaldi
+def parse_gop_output(gop_output_file: str) -> Dict[str, Any]:
+    """
+    Parse les résultats GOP (Goodness of Pronunciation) de Kaldi.
+    
+    Args:
+        gop_output_file: Chemin vers le fichier de sortie GOP de Kaldi
+        
+    Returns:
+        Dict contenant les scores de prononciation, les phonèmes et les phonèmes problématiques
+    """
+    if not os.path.exists(gop_output_file):
+        logger.warning(f"Fichier GOP non trouvé: {gop_output_file}")
+        return {"overall_gop_score": 0.0, "phonemes": [], "problematic_phonemes": []}
+    
+    try:
+        with open(gop_output_file, 'r') as f:
+            lines = f.readlines()
+        
+        phonemes = []
+        problematic_phonemes = []
+        overall_score = 0.0
+        total_phonemes = 0
+        
+        # Format typique: utt_id phoneme score
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 3:
+                try:
+                    ph = parts[1]
+                    score = float(parts[2])
+                    
+                    phoneme_info = {"ph": ph, "score": score}
+                    phonemes.append(phoneme_info)
+                    
+                    if score < 0.7:  # Seuil pour les phonèmes problématiques
+                        problematic_phonemes.append(phoneme_info)
+                    
+                    overall_score += score
+                    total_phonemes += 1
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Erreur parsing ligne GOP: {line.strip()}, erreur: {e}")
+        
+        # Calculer le score global
+        if total_phonemes > 0:
+            overall_score /= total_phonemes
+        
+        return {
+            "overall_gop_score": round(overall_score, 2),
+            "phonemes": phonemes,
+            "problematic_phonemes": problematic_phonemes
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors du parsing du fichier GOP {gop_output_file}: {e}")
+        return {"overall_gop_score": 0.0, "phonemes": [], "problematic_phonemes": []}
+
+def parse_ctm_output(ctm_file: str) -> Dict[str, Any]:
+    """
+    Parse les résultats CTM (Time Marked Conversation) de Kaldi pour extraire des métriques de fluidité.
+    
+    Args:
+        ctm_file: Chemin vers le fichier CTM de Kaldi
+        
+    Returns:
+        Dict contenant les métriques de fluidité (débit de parole, ratio de silence, etc.)
+    """
+    if not os.path.exists(ctm_file):
+        logger.warning(f"Fichier CTM non trouvé: {ctm_file}")
+        return {"speech_rate_wpm": 0, "silence_ratio": 0.0, "filled_pauses_count": 0}
+    
+    try:
+        with open(ctm_file, 'r') as f:
+            lines = f.readlines()
+        
+        total_duration = 0.0
+        speech_duration = 0.0
+        silence_duration = 0.0
+        word_count = 0
+        filled_pauses = 0
+        
+        # Format CTM: utt_id channel start_time duration word [conf]
+        last_end_time = 0.0
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                try:
+                    start_time = float(parts[2])
+                    duration = float(parts[3])
+                    word = parts[4]
+                    
+                    # Détecter les pauses entre les mots
+                    if start_time > last_end_time:
+                        silence_duration += (start_time - last_end_time)
+                    
+                    last_end_time = start_time + duration
+                    word_count += 1
+                    
+                    # Détecter les pauses remplies (euh, um, etc.)
+                    if word.lower() in ["euh", "um", "uh", "hmm"]:
+                        filled_pauses += 1
+                    
+                    speech_duration += duration
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Erreur parsing ligne CTM: {line.strip()}, erreur: {e}")
+        
+        # Calculer les métriques de fluidité
+        total_duration = speech_duration + silence_duration
+        speech_rate_wpm = (word_count / total_duration * 60) if total_duration > 0 else 0
+        silence_ratio = (silence_duration / total_duration) if total_duration > 0 else 0
+        
+        return {
+            "speech_rate_wpm": round(speech_rate_wpm),
+            "silence_ratio": round(silence_ratio, 2),
+            "filled_pauses_count": filled_pauses
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors du parsing du fichier CTM {ctm_file}: {e}")
+        return {"speech_rate_wpm": 0, "silence_ratio": 0.0, "filled_pauses_count": 0}
+
 # Instance du service (si on veut l'appeler via une classe)
 kaldi_service = KaldiService()

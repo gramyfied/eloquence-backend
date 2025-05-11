@@ -142,6 +142,7 @@ class SessionSegment(Base):
     audio_path = Column(String, nullable=False)
     transcript_path = Column(String, nullable=True)
     kaldi_result_path = Column(String, nullable=True)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)  # Ajout de l'attribut timestamp
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     session = relationship("Session", back_populates="segments")

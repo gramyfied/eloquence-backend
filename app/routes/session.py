@@ -186,10 +186,27 @@ async def end_session(
     """
     Termine une session de coaching vocal et génère un résumé final.
     """
-    # Générer un résumé final (à implémenter)
-    summary_url = f"/summaries/{session_id}.pdf"
+    # Vérifier si la session existe
+    session = await db.get(CoachingSession, session_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session non trouvée")
+
+    # Mettre à jour le statut de la session (si nécessaire, dépend de la logique métier)
+    # session.status = "ended"
+    # session.ended_at = datetime.utcnow()
+    # await db.commit()
+    # await db.refresh(session)
+
+    # Générer un résumé final (logique actuelle factice)
+    summary_url = f"/summaries/{session_id}.pdf" # Ceci est une URL factice
     
+    # TODO: Implémenter la logique de génération de résumé et de nettoyage de session avec l'orchestrateur
+    # Par exemple:
+    # final_summary_text = await orchestrator.generate_final_summary(str(session_id), db)
+    # await orchestrator.cleanup_session(str(session_id), db)
+
     return SessionEndResponse(
         message="Session terminée avec succès",
         final_summary_url=summary_url
+        # final_summary=final_summary_text # Si le texte du résumé est retourné directement
     )

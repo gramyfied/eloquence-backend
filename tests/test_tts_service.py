@@ -8,9 +8,10 @@ import asyncio
 from typing import Optional, Dict, Any, AsyncGenerator, Generator
 
 # Marquer tous les tests comme skipped pour le moment
-pytestmark = pytest.mark.skip(reason="Tests du service TTS désactivés temporairement en attendant une correction")
+# pytestmark = pytest.mark.skip(reason="Tests du service TTS désactivés temporairement en attendant une correction")
 
-import redis.asyncio as redis # Pour le cache optionnel
+import redis.asyncio as redis_asyncio # Renommer pour éviter confusion avec une potentielle variable redis
+from redis.asyncio import Redis as AsyncRedis # Importer la classe directement
 
 # Importer la classe à tester et les dépendances
 from services.tts_service_optimized import TTSServiceOptimized as TtsService
@@ -22,7 +23,7 @@ from core.config import settings
 # Mock pour la connexion Redis
 @pytest_asyncio.fixture
 async def mock_redis_conn() -> AsyncMock:
-    conn = AsyncMock(spec=redis.Redis)
+    conn = AsyncMock(spec=AsyncRedis) # Utiliser la classe importée directement
     conn.get = AsyncMock(return_value=None) # Cache miss par défaut
     conn.set = AsyncMock(return_value=True)
     conn.close = MagicMock() # close n'est pas async
