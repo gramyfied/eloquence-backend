@@ -26,8 +26,12 @@ def mock_orchestrator_instance(mocker: MagicMock) -> AsyncMock:
     async def mock_connect_client(websocket, session_id):
         print(f"mock_connect_client CALLED for session {session_id}")
         try:
+            # Accepter explicitement la connexion WebSocket
             await websocket.accept()
             print(f"mock_connect_client ACCEPTED for session {session_id}")
+            # Stocker le websocket dans le dictionnaire des clients connectés
+            if not hasattr(mock_instance, 'connected_clients'):
+                mock_instance.connected_clients = {}
             mock_instance.connected_clients[session_id] = websocket
         except Exception as e:
             print(f"mock_connect_client ERROR during accept for session {session_id}: {e}")
@@ -37,46 +41,62 @@ def mock_orchestrator_instance(mocker: MagicMock) -> AsyncMock:
     async def mock_process_websocket_message(websocket, session_id):
         print(f"--- mock_process_websocket_message CALLED for session {session_id} ---")
         try:
+            # Recevoir le message du client
             message_data = await websocket.receive()
+            print(f"--- mock_process_websocket_message RECEIVED: {message_data} ---")
+            
+            # Comportement d'écho simple : renvoyer le même message
             if "text" in message_data:
                 message_content = message_data["text"]
                 print(f"--- mock_process_websocket_message RECEIVED TEXT: {message_content} ---")
+                
+                # Cas spéciaux pour les tests
                 if message_content == "Hello from test":
                     await websocket.send_text("Mock response to text")
                 elif "trigger_error_text" in message_content:
                     raise Exception("Simulated text processing error")
                 else:
+                    # Écho du message texte
                     await websocket.send_text("Received text message")
+            
             elif "bytes" in message_data:
                 print(f"--- mock_process_websocket_message RECEIVED BYTES ---")
                 if message_data["bytes"] == b"trigger_error":
-                     pass
+                    # Cas spécial pour le test d'erreur
+                    if str(mock_instance.process_websocket_message.side_effect) == "Orchestrator Error":
+                        raise Exception("Orchestrator Error")
                 else:
+                    # Écho du message binaire
                     await websocket.send_bytes(b"Received audio chunk")
+        
         except WebSocketDisconnect:
             print(f"--- mock_process_websocket_message WebSocketDisconnect for session {session_id} ---")
-            if session_id in mock_instance.connected_clients:
+            if hasattr(mock_instance, 'connected_clients') and session_id in mock_instance.connected_clients:
                 del mock_instance.connected_clients[session_id]
+        
         except Exception as e:
-            if str(e) != "Orchestrator Error":
-                print(f"Unexpected error in mock_process_websocket_message for session {session_id}: {e}")
-            # Ne pas propager l'erreur si c'est "Orchestrator Error" car le test s'y attend
+            print(f"Error in mock_process_websocket_message: {e}")
             if str(e) == "Orchestrator Error":
-                raise # Laisser le test gérer cette erreur spécifique
+                raise  # Laisser le test gérer cette erreur spécifique
+        
         return
 
     async def mock_disconnect_client(session_id):
         print(f"--- mock_disconnect_client CALLED for session {session_id} ---")
-        if session_id in mock_instance.connected_clients:
+        if hasattr(mock_instance, 'connected_clients') and session_id in mock_instance.connected_clients:
             del mock_instance.connected_clients[session_id]
         return
 
     mock_instance.connect_client = AsyncMock(side_effect=mock_connect_client)
     mock_instance.process_websocket_message = AsyncMock(side_effect=mock_process_websocket_message)
     mock_instance.disconnect_client = AsyncMock(side_effect=mock_disconnect_client)
-    mock_instance.initialize = AsyncMock()
+    # Initialiser les attributs nécessaires
+    mock_instance.initialize = AsyncMock(return_value=None)
     mock_instance.active_sessions = {}
     mock_instance.connected_clients = {}
+    
+    # Ajouter un message de debug
+    print(f"Created mock_orchestrator_instance with id {id(mock_instance)}")
 
     # mocker.patch('services.orchestrator.Orchestrator', return_value=mock_instance) # Supprimé pour simplification
     # mocker.patch('app.routes.websocket.orchestrator', new=mock_instance, create=True) # Supprimé pour simplification
@@ -116,7 +136,10 @@ def client(
     # Fonctions d'override pour les dépendances
     async def patched_get_orchestrator_override():
         print("--- patched_get_orchestrator_override CALLED ---")
-        # Pas besoin d'appeler initialize() ici si le mock_orchestrator_instance.initialize est déjà un AsyncMock
+        # S'assurer que l'orchestrateur est initialisé
+        if not mock_orchestrator_instance.initialize.called:
+            await mock_orchestrator_instance.initialize()
+        print(f"Returning mock_orchestrator_instance with id {id(mock_orchestrator_instance)}")
         return mock_orchestrator_instance
 
     async def mock_get_db_override():
@@ -165,8 +188,9 @@ def client(
 # Note: Les tests WebSocket avec TestClient sont synchrones, même si l'endpoint est async.
 # pytest.mark.asyncio n'est pas nécessaire pour les fonctions de test elles-mêmes ici.
 
-# Marquer tous les tests comme skipped pour le moment
-pytestmark = pytest.mark.skip(reason="Tests WebSocket désactivés temporairement pour se concentrer sur d'autres tests.")
+# Les tests WebSocket complexes sont désactivés pour le moment
+# Nous utilisons test_websocket_echo.py pour tester la fonctionnalité WebSocket de base
+pytestmark = pytest.mark.skip(reason="Tests WebSocket complexes désactivés. Utiliser test_websocket_echo.py pour les tests WebSocket de base.")
 
 def test_websocket_connection_success(
     client: TestClient,
