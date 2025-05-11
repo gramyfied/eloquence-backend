@@ -68,13 +68,8 @@ async def websocket_endpoint(
         # Note: Dans une implémentation réelle, il faudrait vérifier que l'utilisateur
         # a le droit d'accéder à cette session
         
-        # Accepter la connexion WebSocket
-        await websocket.accept()
-        logger.info(f"Connexion WebSocket acceptée manuellement pour session {session_id}")
-        
-        # Connecter le client à l'orchestrateur
+        # Connecter le client à l'orchestrateur (qui acceptera la connexion)
         await orchestrator.connect_client(websocket, session_id)
-        logger.info(f"Connexion WebSocket acceptée pour session {session_id}")
         
         # Boucle de traitement des messages
         while True:
@@ -111,7 +106,7 @@ async def debug_websocket_endpoint(
         session_id = "debug-session"
     
     try:
-        # Accepter la connexion WebSocket
+        # Connecter le client à l'orchestrateur (qui acceptera la connexion)
         await orchestrator.connect_client(websocket, session_id)
         logger.info(f"Connexion WebSocket de débogage acceptée pour session {session_id}")
         
@@ -127,6 +122,46 @@ async def debug_websocket_endpoint(
     
     except Exception as e:
         logger.error(f"Erreur WebSocket de débogage: {e}", exc_info=True)
+        # Tenter de fermer proprement
+        try:
+            await orchestrator.disconnect_client(session_id)
+        except:
+            pass
+
+@router.websocket("/ws/simple/{session_id}")
+async def simple_websocket_endpoint(
+    websocket: WebSocket,
+    session_id: str,
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Point d'entrée WebSocket simplifié pour l'application mobile.
+    Accepte les connexions sans authentification.
+    """
+    logger.info(f"Nouvelle connexion WebSocket simple entrante pour session {session_id}")
+    
+    try:
+        # Accepter manuellement la connexion WebSocket
+        await websocket.accept()
+        logger.info(f"Connexion WebSocket simple acceptée manuellement pour session {session_id}")
+        
+        # Connecter le client à l'orchestrateur
+        await orchestrator.connect_client(websocket, session_id)
+        logger.info(f"Client connecté à l'orchestrateur pour session {session_id}")
+        
+        # Boucle de traitement des messages
+        while True:
+            logger.info(f"En attente de message WebSocket simple pour session {session_id}...")
+            await orchestrator.process_websocket_message(websocket, session_id)
+            logger.info(f"Message WebSocket simple traité pour session {session_id}.")
+    
+    except WebSocketDisconnect:
+        logger.info(f"Client déconnecté de la session simple {session_id}")
+        await orchestrator.disconnect_client(session_id)
+    
+    except Exception as e:
+        logger.error(f"Erreur WebSocket simple: {e}", exc_info=True)
         # Tenter de fermer proprement
         try:
             await orchestrator.disconnect_client(session_id)
