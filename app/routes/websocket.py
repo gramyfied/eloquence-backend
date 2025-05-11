@@ -142,11 +142,7 @@ async def simple_websocket_endpoint(
     logger.info(f"Nouvelle connexion WebSocket simple entrante pour session {session_id}")
     
     try:
-        # Accepter manuellement la connexion WebSocket
-        await websocket.accept()
-        logger.info(f"Connexion WebSocket simple acceptée manuellement pour session {session_id}")
-        
-        # Connecter le client à l'orchestrateur
+        # Connecter le client à l'orchestrateur (qui acceptera la connexion)
         await orchestrator.connect_client(websocket, session_id)
         logger.info(f"Client connecté à l'orchestrateur pour session {session_id}")
         
