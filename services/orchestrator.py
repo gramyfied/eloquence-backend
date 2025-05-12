@@ -83,8 +83,15 @@ class Orchestrator:
     async def connect_client(self, websocket: WebSocket, session_id: str):
         """
         Gère la connexion d'un nouveau client WebSocket.
+        Gère correctement les reconnexions.
+        Note: La connexion doit déjà être acceptée par la route WebSocket.
         """
-        await websocket.accept()
+        # Si un client était déjà connecté avec cet ID de session, le déconnecter proprement
+        if session_id in self.connected_clients:
+            logger.info(f"Un client était déjà connecté avec l'ID de session {session_id}, nettoyage de l'ancienne connexion")
+            # Ne pas appeler disconnect_client ici pour éviter de marquer la session comme terminée
+            # Simplement remplacer la connexion
+        
         self.connected_clients[session_id] = websocket
         
         if session_id not in self.active_sessions:
@@ -103,15 +110,50 @@ class Orchestrator:
             }
             logger.info(f"Nouvelle session initialisée: {session_id}")
         else:
+            # Réinitialiser certains états pour la reconnexion
+            self.active_sessions[session_id]["state"] = SESSION_STATE_IDLE
+            self.active_sessions[session_id]["is_interrupted"] = False
             logger.info(f"Client reconnecté à la session: {session_id}")
+        
+        # Envoyer un message de bienvenue
+        await self._send_message(session_id, {
+            "type": "text_response",
+            "status": "connected",
+            "message": f"Bienvenue dans la session {session_id}"
+        })
     
     async def disconnect_client(self, session_id: str):
         """
         Gère la déconnexion d'un client WebSocket.
+        Nettoie correctement l'état de la session.
         """
-        if session_id in self.connected_clients:
-            del self.connected_clients[session_id]
+        try:
+            # Vérifier si le client est toujours connecté
+            if session_id in self.connected_clients:
+                # Récupérer le websocket avant de le supprimer
+                websocket = self.connected_clients[session_id]
+                
+                # Supprimer le client de la liste des connexions actives
+                del self.connected_clients[session_id]
+                logger.info(f"Client supprimé de la liste des connexions actives: {session_id}")
+                
+                # Essayer de fermer proprement la connexion WebSocket si elle est encore ouverte
+                try:
+                    await websocket.close(code=1000, reason="Session terminée normalement")
+                    logger.info(f"Connexion WebSocket fermée proprement pour session: {session_id}")
+                except Exception as close_error:
+                    # La connexion est peut-être déjà fermée, ce n'est pas grave
+                    logger.debug(f"Impossible de fermer la connexion WebSocket (probablement déjà fermée): {close_error}")
+            
+            # Nettoyer l'état de la session ou la marquer comme inactive
+            if session_id in self.active_sessions:
+                self.active_sessions[session_id]["state"] = SESSION_STATE_ENDED
+                logger.info(f"Session marquée comme terminée: {session_id}")
+            
             logger.info(f"Client déconnecté de la session: {session_id}")
+        except Exception as e:
+            # Capturer toutes les exceptions pour éviter de propager des erreurs
+            logger.error(f"Erreur lors de la déconnexion du client {session_id}: {e}", exc_info=True)
     
     async def end_session(self, session_id: str):
         """
@@ -126,16 +168,23 @@ class Orchestrator:
     async def process_websocket_message(self, websocket: WebSocket, session_id: str):
         """
         Traite les messages entrants du WebSocket.
+        Gère correctement les déconnexions et les erreurs.
         """
+        # Vérifier d'abord si le client est toujours connecté
+        if session_id not in self.connected_clients:
+            logger.warning(f"Tentative de traiter un message pour une session déconnectée: {session_id}")
+            raise WebSocketDisconnect(code=1000)
+        
         try:
-            message = await websocket.receive()
+            # Utiliser un timeout pour éviter de bloquer indéfiniment
+            message = await asyncio.wait_for(websocket.receive(), timeout=5.0)
             
             # Message binaire (audio)
             if "bytes" in message:
                 audio_chunk = message["bytes"]
                 await self._process_audio_chunk(session_id, audio_chunk)
             
-            # Message texte (contrôle)
+            # Message texte (contrôle ou autre)
             elif "text" in message:
                 try:
                     data = json.loads(message["text"])
@@ -143,15 +192,30 @@ class Orchestrator:
                     
                     logger.info(f"Message texte reçu: {data}")
                     logger.info(f"Type de message: {msg_type}")
-                    logger.info(f"WS_MSG_CONTROL: {WS_MSG_CONTROL}")
                     
                     if msg_type == WS_MSG_CONTROL:
+                        # Message de contrôle (interruption, etc.)
                         event = data.get("event")
                         logger.info(f"Événement de contrôle: {event}")
-                        logger.info(f"CONTROL_USER_INTERRUPT: {CONTROL_USER_INTERRUPT}")
                         await self._process_control_event(session_id, event)
+                    elif msg_type == "text":
+                        # Message texte simple (chat, commande, etc.)
+                        content = data.get("content", "")
+                        logger.info(f"Message texte simple reçu: {content}")
+                        # Envoyer une confirmation de réception
+                        await self._send_message(session_id, {
+                            "type": "text_response",
+                            "status": "received",
+                            "message": f"Message reçu: {content}"
+                        })
                     else:
                         logger.warning(f"Type de message inconnu: {msg_type}")
+                        # Envoyer une réponse même pour les types inconnus
+                        await self._send_message(session_id, {
+                            "type": "error",
+                            "status": "unknown_type",
+                            "message": f"Type de message non reconnu: {msg_type}"
+                        })
                 except json.JSONDecodeError:
                     logger.error("Message JSON invalide")
                     await self._send_error(session_id, "Message JSON invalide")
@@ -160,11 +224,42 @@ class Orchestrator:
                 logger.warning("Format de message WebSocket non pris en charge")
                 await self._send_error(session_id, "Format de message non pris en charge")
         
+        except asyncio.TimeoutError:
+            logger.info(f"Timeout en attendant un message pour la session {session_id}")
+            # Envoyer un heartbeat pour maintenir la connexion active
+            try:
+                await self._send_message(session_id, {
+                    "type": "heartbeat",
+                    "timestamp": time.time()
+                })
+            except Exception as heartbeat_error:
+                logger.error(f"Erreur lors de l'envoi du heartbeat: {heartbeat_error}")
+                # Si le heartbeat échoue, la connexion est probablement fermée
+                raise WebSocketDisconnect(code=1001)
+        
         except WebSocketDisconnect:
-            await self.disconnect_client(session_id)
+            logger.info(f"WebSocketDisconnect détecté pour session {session_id}")
+            # Propager l'exception pour que le gestionnaire de route puisse la traiter
+            raise
+        
+        except RuntimeError as e:
+            # Gérer spécifiquement l'erreur "Cannot call 'receive' once a disconnect message has been received"
+            if "Cannot call 'receive' once a disconnect message has been received" in str(e):
+                logger.info(f"Client déjà déconnecté pour session {session_id}")
+                raise WebSocketDisconnect(code=1000)
+            else:
+                # Autres erreurs RuntimeError
+                logger.error(f"Erreur RuntimeError lors du traitement du message WebSocket: {e}", exc_info=True)
+                await self._send_error(session_id, f"Erreur interne: {str(e)}")
+        
         except Exception as e:
             logger.error(f"Erreur lors du traitement du message WebSocket: {e}", exc_info=True)
-            await self._send_error(session_id, f"Erreur interne: {str(e)}")
+            try:
+                await self._send_error(session_id, f"Erreur interne: {str(e)}")
+            except Exception:
+                # Si l'envoi du message d'erreur échoue, la connexion est probablement fermée
+                logger.warning(f"Impossible d'envoyer le message d'erreur, connexion probablement fermée pour session {session_id}")
+                raise WebSocketDisconnect(code=1001)
     
     async def _process_audio_chunk(self, session_id: str, audio_chunk: bytes):
         """
@@ -606,6 +701,7 @@ class Orchestrator:
     async def _send_message(self, session_id: str, message: Dict):
         """
         Envoie un message JSON au client WebSocket.
+        Gère correctement les erreurs de connexion.
         """
         logger.info(f"_send_message appelé avec session_id={session_id}, message={message}")
         
@@ -619,12 +715,15 @@ class Orchestrator:
                 logger.info("send_json appelé avec succès")
             except Exception as e:
                 logger.error(f"Erreur lors de l'envoi du message JSON: {e}", exc_info=True)
+                # Déconnecter le client si une erreur se produit
+                await self.disconnect_client(session_id)
         else:
             logger.error(f"WebSocket non trouvé pour session_id={session_id}")
     
     async def _send_binary(self, session_id: str, data: bytes):
         """
         Envoie des données binaires au client WebSocket.
+        Gère correctement les erreurs de connexion.
         """
         websocket = self.connected_clients.get(session_id)
         if websocket:
@@ -632,6 +731,8 @@ class Orchestrator:
                 await websocket.send_bytes(data)
             except Exception as e:
                 logger.error(f"Erreur lors de l'envoi des données binaires: {e}", exc_info=True)
+                # Déconnecter le client si une erreur se produit
+                await self.disconnect_client(session_id)
     
     async def _send_error(self, session_id: str, error_message: str):
         """
