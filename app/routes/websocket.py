@@ -68,7 +68,11 @@ async def websocket_endpoint(
         # Note: Dans une implémentation réelle, il faudrait vérifier que l'utilisateur
         # a le droit d'accéder à cette session
         
-        # Connecter le client à l'orchestrateur (qui acceptera la connexion)
+        # Accepter explicitement la connexion WebSocket
+        await websocket.accept()
+        logger.info(f"Connexion WebSocket acceptée pour session {session_id}")
+        
+        # Connecter le client à l'orchestrateur
         await orchestrator.connect_client(websocket, session_id)
         
         # Boucle de traitement des messages
@@ -106,9 +110,12 @@ async def debug_websocket_endpoint(
         session_id = "debug-session"
     
     try:
-        # Connecter le client à l'orchestrateur (qui acceptera la connexion)
-        await orchestrator.connect_client(websocket, session_id)
+        # Accepter explicitement la connexion WebSocket
+        await websocket.accept()
         logger.info(f"Connexion WebSocket de débogage acceptée pour session {session_id}")
+        
+        # Connecter le client à l'orchestrateur
+        await orchestrator.connect_client(websocket, session_id)
         
         # Boucle de traitement des messages
         while True:

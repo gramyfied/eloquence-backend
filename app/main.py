@@ -14,6 +14,7 @@ from app.routes.session import router as session_router
 from app.routes.audio import router as audio_router
 from app.routes.monitoring import router as monitoring_router
 from app.routes.scenarios import router as scenarios_router
+from app.routes.websocket import router as websocket_router
 from app.routes.websocket_simple import router as websocket_simple_router
 from core.database import init_db
 from core.config import settings
@@ -123,4 +124,5 @@ app.include_router(session_router, prefix="/api", tags=["session"]) # Rétablir 
 app.include_router(audio_router, prefix="/api", tags=["audio"])
 app.include_router(monitoring_router, prefix="/api", tags=["monitoring"])
 app.include_router(scenarios_router, prefix="/api", tags=["scenarios"])
+app.include_router(websocket_router, tags=["websocket"])
 app.include_router(websocket_simple_router, tags=["websocket_simple"])
