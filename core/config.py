@@ -10,7 +10,7 @@ load_dotenv()
 class Settings(BaseSettings):
     # Paramètres de l'application
     DEBUG: bool = False
-    HOST: str = "127.0.0.1"  # Modifié de "0.0.0.0" à "127.0.0.1" pour éviter les conflits
+    HOST: str = "0.0.0.0"  # Modifié de "127.0.0.1" à "0.0.0.0" pour permettre les connexions externes, y compris depuis les émulateurs
     PORT: int = 8083  # Port par défaut
     LOG_LEVEL: str = "info"
     LOG_DIR: str = "./logs"
@@ -105,13 +105,17 @@ class Settings(BaseSettings):
     LLM_MAX_MAX_TOKENS: int = 512 # Max tokens pour Scaleway (selon l'exemple utilisateur)
     LLM_TIMEOUT_S: int = 30  # Timeout en secondes
 
-    # TTS (Coqui TTS API)
+    # TTS (Coqui TTS)
     TTS_API_URL: str = "http://localhost:5002/api/tts"
     TTS_USE_CACHE: bool = True
     TTS_CACHE_PREFIX: str = "tts_cache:"
     TTS_CACHE_EXPIRATION_S: int = 3600 * 24 # Cache pour 24h par défaut
     TTS_PRELOAD_COMMON_PHRASES: bool = True  # Précharger les phrases courantes au démarrage
     TTS_IMMEDIATE_STOP: bool = True  # Pour les interruptions
+    
+    # TTS Local (Coqui TTS Library)
+    TTS_MODEL_NAME: str = "tts_models/fr/mai/tacotron2-DDC"  # Modèle français par défaut
+    TTS_DEVICE: str = "cpu"  # "cuda" ou "cpu"
 
     # TTS Specific Voices/Emotions - à adapter selon la méthode (VITS/XTTS)
     # Exemple VITS (speaker_id par émotion)
