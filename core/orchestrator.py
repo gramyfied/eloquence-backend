@@ -103,6 +103,9 @@ class SessionState:
         self.current_turn_number: int = 0  # Compteur de tours
         self.last_activity_time: float = time.time()  # Pour timeouts généraux
         self.gentle_prompt_triggered: bool = False  # Flag pour la relance douce
+        self.audio_buffer: bytes = b""  # Buffer pour l'ASR
+        self.is_speaking: bool = False  # Flag indiquant si l'utilisateur est en train de parler
+        self.is_interrupted: bool = False  # Flag indiquant si l'utilisateur a interrompu l'IA
         
     def add_participant(self, participant_state: ParticipantState) -> None:
         """Ajoute un participant à la session."""
@@ -804,8 +807,8 @@ class Orchestrator:
             logger.info(f"Session {session_id}: Annulation de la tâche TTS en cours.")
             # Essayer d'abord d'arrêter proprement la génération via l'API
             try:
-                # Appeler la méthode stop_generation du service TTS
-                stop_success = await self.tts_service.stop_generation(session_id)
+                # Appeler la méthode stop_synthesis du service TTS
+                stop_success = await self.tts_service.stop_synthesis(session_id)
                 if not stop_success:
                     # Si l'arrêt via API échoue, annuler la tâche asyncio
                     logger.info(f"Session {session_id}: Arrêt via API échoué, annulation de la tâche asyncio.")

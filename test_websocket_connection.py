@@ -16,8 +16,9 @@ async def test_websocket_connection(uri):
     try:
         logger.info(f"Tentative de connexion à {uri}")
         
-        # Tentative de connexion avec timeout
-        async with websockets.connect(uri, ping_interval=None, close_timeout=5) as websocket:
+        # Tentative de connexion avec timeout et plus de logs
+        logger.info("Tentative de connexion avec ping_interval=None, close_timeout=5")
+        async with websockets.connect(uri, ping_interval=None, close_timeout=5, max_size=None, max_queue=None, logger=logger) as websocket:
             logger.info("✅ Connexion établie!")
             
             # Envoyer un message texte
@@ -30,7 +31,8 @@ async def test_websocket_connection(uri):
             
             # Attendre la réponse avec timeout
             try:
-                response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                logger.info("En attente de réponse du serveur (timeout=10s)...")
+                response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
                 logger.info(f"✅ Réponse reçue: {response}")
                 
                 # Tenter de parser la réponse JSON
@@ -72,7 +74,7 @@ if __name__ == "__main__":
         uri = sys.argv[1]
     else:
         # URI par défaut
-        session_id = "test-session-123"
+        session_id = "c320c269-9bfd-48c6-beea-7bdddf43a441"
         uri = f"ws://localhost:8083/ws/simple/{session_id}"
         
     logger.info(f"Test de connexion WebSocket à {uri}")
