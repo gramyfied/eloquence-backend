@@ -200,6 +200,35 @@ class Orchestrator:
                         event = data.get("event")
                         logger.debug(f"Événement de contrôle: {event}")
                         await self._process_control_event(session_id, event)
+                    elif msg_type == "start_audio_stream":
+                        # Début du streaming audio
+                        logger.info(f"Début du streaming audio pour session {session_id}")
+                        session = self.active_sessions.get(session_id)
+                        if session:
+                            session["state"] = SESSION_STATE_USER_SPEAKING
+                            session["current_audio_buffer"] = bytearray()
+                            session["speech_detected"] = False
+                            session["silence_duration"] = 0
+                            session["last_speech_time"] = None
+                            session["segment_id"] = str(uuid.uuid4())
+                            logger.debug(f"Début de la parole utilisateur en streaming, segment: {session['segment_id']}")
+                            await self._send_message(session_id, {
+                                "type": "audio_stream_status",
+                                "status": "started",
+                                "message": "Streaming audio démarré"
+                            })
+                    elif msg_type == "end_audio_stream":
+                        # Fin du streaming audio
+                        logger.info(f"Fin du streaming audio pour session {session_id}")
+                        session = self.active_sessions.get(session_id)
+                        if session and session["state"] == SESSION_STATE_USER_SPEAKING:
+                            # Traiter la fin de la parole utilisateur
+                            await self._process_user_speech_end(session_id)
+                            await self._send_message(session_id, {
+                                "type": "audio_stream_status",
+                                "status": "ended",
+                                "message": "Streaming audio terminé"
+                            })
                     elif msg_type == "text":
                         # Message texte simple (chat, commande, etc.)
                         content = data.get("content", "")
