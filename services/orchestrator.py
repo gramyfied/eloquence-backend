@@ -185,7 +185,11 @@ class Orchestrator:
             if "bytes" in message:
                 audio_chunk = message["bytes"]
                 logger.info(f"Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
-                await self._process_audio_chunk(session_id, audio_chunk)
+                logger.info(f"Type de message: {type(message)}, clés: {message.keys()}")
+                try:
+                    await self._process_audio_chunk(session_id, audio_chunk)
+                except Exception as e:
+                    logger.error(f"Erreur lors du traitement du chunk audio: {e}", exc_info=True)
             
             # Message texte (contrôle ou autre)
             elif "text" in message:
@@ -224,7 +228,11 @@ class Orchestrator:
                         session = self.active_sessions.get(session_id)
                         if session and session["state"] == SESSION_STATE_USER_SPEAKING:
                             # Traiter la fin de la parole utilisateur
-                            await self._process_user_speech_end(session_id)
+                            logger.info(f"Taille du buffer audio avant traitement: {len(session.get('current_audio_buffer', b''))}")
+                            try:
+                                await self._process_user_speech_end(session_id)
+                            except Exception as e:
+                                logger.error(f"Erreur lors du traitement de la fin de parole: {e}", exc_info=True)
                             await self._send_message(session_id, {
                                 "type": "audio_stream_status",
                                 "status": "ended",
