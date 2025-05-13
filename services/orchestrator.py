@@ -184,6 +184,7 @@ class Orchestrator:
             # Message binaire (audio)
             if "bytes" in message:
                 audio_chunk = message["bytes"]
+                logger.info(f"Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
                 await self._process_audio_chunk(session_id, audio_chunk)
             
             # Message texte (contrôle ou autre)
@@ -404,7 +405,13 @@ class Orchestrator:
         """
         logger.info(f"Session {session_id}: Entering _process_user_speech_end. Current state: {self.active_sessions.get(session_id, {}).get('state')}")
         session = self.active_sessions.get(session_id)
-        if not session or session["state"] != SESSION_STATE_USER_SPEAKING:
+        if not session:
+            logger.error(f"Session {session_id} non trouvée")
+            return
+        
+        # Vérifier si la session est dans un état valide pour le traitement
+        if session["state"] != SESSION_STATE_USER_SPEAKING and session["state"] != SESSION_STATE_PROCESSING:
+            logger.warning(f"État de session invalide pour le traitement: {session['state']}")
             return
         
         # Marquer le début du traitement
@@ -413,6 +420,7 @@ class Orchestrator:
         
         # Convertir le buffer audio en WAV pour l'ASR
         audio_data = session["current_audio_buffer"]
+        logger.info(f"Taille du buffer audio: {len(audio_data)} bytes")
         if len(audio_data) == 0:
             logger.warning("Buffer audio vide, abandon du traitement")
             session["state"] = SESSION_STATE_IDLE
@@ -438,15 +446,25 @@ class Orchestrator:
         language = "fr"  # Langue par défaut
         logger.info(f"Session {session_id}: Début de la transcription ASR pour le segment {segment_id}...")
         asr_start_time_perf = time.perf_counter()
-        transcription = await self.asr_service.transcribe(audio_data, language)
-        logger.info(f"Session {session_id}: Transcription ASR en cours avec {len(audio_data)} bytes audio")
-        asr_time = time.time()
-        asr_duration = time.perf_counter() - asr_start_time_perf
-        logger.info(f"Session {session_id}: Transcription ASR terminée en {asr_duration:.2f}s")
-        
-        if not transcription:
-            logger.warning("Transcription ASR vide, abandon du traitement")
+        try:
+            transcription = await self.asr_service.transcribe(audio_data, language)
+            logger.info(f"Session {session_id}: Transcription ASR en cours avec {len(audio_data)} bytes audio")
+            asr_time = time.time()
+            asr_duration = time.perf_counter() - asr_start_time_perf
+            logger.info(f"Session {session_id}: Transcription ASR terminée en {asr_duration:.2f}s")
+            
+            if not transcription:
+                logger.warning("Transcription ASR vide, abandon du traitement")
+                session["state"] = SESSION_STATE_IDLE
+                return
+        except Exception as e:
+            logger.error(f"Erreur lors de la transcription ASR: {e}", exc_info=True)
             session["state"] = SESSION_STATE_IDLE
+            await self._send_message(session_id, {
+                "type": "error",
+                "status": "asr_error",
+                "message": f"Erreur lors de la transcription: {str(e)}"
+            })
             return
         
         logger.info(f"Transcription ASR: {transcription}")
@@ -461,13 +479,24 @@ class Orchestrator:
         
         # Générer la réponse LLM
         is_interrupted = session["is_interrupted"]
-        llm_response = await self.llm_service.generate(
-            session["history"],
-            is_interrupted=is_interrupted,
-            scenario_context=session["scenario_context"],
-            session_id=session_id
-        )
-        llm_time = time.time()
+        try:
+            llm_response = await self.llm_service.generate(
+                session["history"],
+                is_interrupted=is_interrupted,
+                scenario_context=session["scenario_context"],
+                session_id=session_id
+            )
+            llm_time = time.time()
+            logger.info(f"Réponse LLM générée: {llm_response}")
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération LLM: {e}", exc_info=True)
+            session["state"] = SESSION_STATE_IDLE
+            await self._send_message(session_id, {
+                "type": "error",
+                "status": "llm_error",
+                "message": f"Erreur lors de la génération de la réponse: {str(e)}"
+            })
+            return
         
         # Réinitialiser le flag d'interruption
         session["is_interrupted"] = False
@@ -495,6 +524,23 @@ class Orchestrator:
         
         # Synthèse vocale TTS
         logger.info(f"Synthèse TTS avec émotion: {emotion_label}")
+        
+        # Envoyer d'abord la transcription au client
+        await self._send_message(session_id, {
+            "type": WS_MSG_TRANSCRIPT,
+            "text": transcription,
+            "is_final": True
+        })
+        
+        # Envoyer la réponse texte au client
+        await self._send_message(session_id, {
+            "type": "agent_message",
+            "message": text_response,
+            "agent_id": "recruteur",
+            "session_id": session_id
+        })
+        
+        # Notifier le client que l'IA commence à parler
         await self._send_message(session_id, {
             "type": WS_MSG_AUDIO_CONTROL,
             "event": AUDIO_IA_SPEECH_START
