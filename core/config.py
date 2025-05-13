@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     LLM_BACKEND: str = "vllm"  # "vllm" ou "tgi"
     LLM_LOCAL_API_URL: str = "http://localhost:8000"  # URL du serveur vLLM ou TGI
     LLM_API_URL: str = "https://ai-ousmanesissoko-8429.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"  # Fallback Azure
-    SCW_LLM_API_KEY: str # Clé API Scaleway pour le LLM
+    SCW_LLM_API_KEY: Optional[str] = None # Clé API Scaleway pour le LLM
     LLM_MODEL_NAME: str = "mistral-nemo-instruct-2407" # Modèle Scaleway par défaut
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 150 # Max tokens par défaut (peut être surchargé par LLM_MAX_MAX_TOKENS)

@@ -11,6 +11,7 @@ services:
     volumes:
       - ./data:/app/data # Partage des données (audio, feedback parsé)
       - ./logs:/app/logs
+      - ./core/config.py:/app/core/config.py # Monter le fichier config.py modifié
     environment:
       - DATABASE_URL=postgresql+asyncpg://eloquence:eloquence@db:5432/eloquence
       - REDIS_HOST=redis
@@ -24,6 +25,7 @@ services:
       - TTS_API_URL=http://tts-service:5002/api/tts
       - KALDI_CONTAINER_NAME=kaldi_eloquence # Nom fixe pour docker exec
       - DEBUG=true
+      - SCW_LLM_API_KEY=dummy_key_for_testing
     depends_on:
       - db
       - redis

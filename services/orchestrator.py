@@ -187,6 +187,20 @@ class Orchestrator:
                 print(f"AUDIO_DEBUG: Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
                 logger.critical(f"AUDIO_DEBUG: Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
                 logger.critical(f"AUDIO_DEBUG: Type de message: {type(message)}, clés: {message.keys()}")
+                logger.critical(f"AUDIO_DEBUG: Type de données audio: {type(audio_chunk)}")
+                logger.critical(f"AUDIO_DEBUG: Premiers octets: {audio_chunk[:20] if len(audio_chunk) > 20 else audio_chunk}")
+                
+                # Vérifier si la session existe et est dans un état valide
+                session = self.active_sessions.get(session_id)
+                if not session:
+                    error_msg = f"Session {session_id} non trouvée lors du traitement d'un chunk audio"
+                    print(f"AUDIO_ERROR: {error_msg}")
+                    logger.critical(f"AUDIO_ERROR: {error_msg}")
+                    logger.error(error_msg)
+                    return
+                
+                logger.critical(f"AUDIO_DEBUG: État de la session avant traitement: {session.get('state', 'None')}")
+                
                 try:
                     await self._process_audio_chunk(session_id, audio_chunk)
                 except Exception as e:
@@ -320,6 +334,64 @@ class Orchestrator:
         logger.critical(f"AUDIO_DEBUG: Type de données audio: {type(audio_chunk)}")
         logger.critical(f"AUDIO_DEBUG: Premiers octets: {audio_chunk[:20] if len(audio_chunk) > 20 else audio_chunk}")
         
+        # Détecter si le format est AAC (en vérifiant les premiers octets)
+        is_aac_format = False
+        if len(audio_chunk) > 2:
+            # Vérification simplifiée des signatures AAC (ADTS header)
+            if audio_chunk[0] == 0xFF and (audio_chunk[1] & 0xF0) == 0xF0:
+                is_aac_format = True
+                print(f"AUDIO_DEBUG: Format AAC détecté pour session {session_id}")
+                logger.critical(f"AUDIO_DEBUG: Format AAC détecté pour session {session_id}")
+        
+        # Conversion du format AAC vers PCM 16-bit si nécessaire
+        converted_audio = None
+        if is_aac_format:
+            try:
+                import subprocess
+                import tempfile
+                import os
+                
+                print(f"AUDIO_DEBUG: Conversion AAC vers PCM 16-bit pour session {session_id}")
+                logger.critical(f"AUDIO_DEBUG: Conversion AAC vers PCM 16-bit pour session {session_id}")
+                
+                # Créer des fichiers temporaires pour l'entrée et la sortie
+                with tempfile.NamedTemporaryFile(suffix='.aac', delete=False) as input_file:
+                    input_file.write(audio_chunk)
+                    input_path = input_file.name
+                
+                output_path = input_path + '.wav'
+                
+                # Exécuter ffmpeg pour convertir AAC en WAV PCM 16-bit
+                result = subprocess.run([
+                    'ffmpeg', '-y', '-i', input_path,
+                    '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+                    output_path
+                ], capture_output=True)
+                
+                if result.returncode != 0:
+                    print(f"AUDIO_ERROR: Erreur ffmpeg: {result.stderr.decode('utf-8')}")
+                    logger.critical(f"AUDIO_ERROR: Erreur ffmpeg: {result.stderr.decode('utf-8')}")
+                else:
+                    # Lire le fichier WAV converti
+                    with open(output_path, 'rb') as f:
+                        converted_audio = f.read()
+                    
+                    print(f"AUDIO_DEBUG: Conversion réussie, taille avant: {len(audio_chunk)}, taille après: {len(converted_audio)}")
+                    logger.critical(f"AUDIO_DEBUG: Conversion réussie, taille avant: {len(audio_chunk)}, taille après: {len(converted_audio)}")
+                
+                # Nettoyer les fichiers temporaires
+                try:
+                    os.unlink(input_path)
+                    os.unlink(output_path)
+                except:
+                    pass
+                
+            except Exception as e:
+                error_msg = f"Erreur lors de la conversion audio: {e}"
+                print(f"AUDIO_ERROR: {error_msg}")
+                logger.critical(f"AUDIO_ERROR: {error_msg}")
+                logger.error(error_msg, exc_info=True)
+        
         session = self.active_sessions.get(session_id)
         logger.critical(f"AUDIO_DEBUG: État actuel de la session: {session.get('state', 'None') if session else 'None'}, speech_detected: {session.get('speech_detected', False) if session else False}, silence_duration: {session.get('silence_duration', 0) if session else 0}")
         if not session:
@@ -346,11 +418,19 @@ class Orchestrator:
             session["segment_id"] = str(uuid.uuid4())
             logger.debug(f"Début de la parole utilisateur, segment: {session['segment_id']}")
         
-        # Ajouter le chunk au buffer
-        session["current_audio_buffer"].extend(audio_chunk)
+        # Ajouter le chunk au buffer (utiliser l'audio converti si disponible)
+        if converted_audio:
+            print(f"AUDIO_DEBUG: Utilisation de l'audio converti pour session {session_id}")
+            logger.critical(f"AUDIO_DEBUG: Utilisation de l'audio converti pour session {session_id}")
+            session["current_audio_buffer"].extend(converted_audio)
+            # Utiliser l'audio original pour le VAD car il fonctionne bien avec l'AAC
+            vad_audio_chunk = audio_chunk
+        else:
+            session["current_audio_buffer"].extend(audio_chunk)
+            vad_audio_chunk = audio_chunk
         
         # Traiter avec le VAD - nouvelle interface retournant un dictionnaire
-        vad_result = self.vad_service.process_chunk(audio_chunk)
+        vad_result = self.vad_service.process_chunk(vad_audio_chunk)
         speech_prob = vad_result["speech_prob"]
         is_speech = vad_result["is_speech"]
         confidence = vad_result["confidence"]

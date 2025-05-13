@@ -25,7 +25,21 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 
+# Configuration du FileHandler pour écrire les logs dans un fichier
+# Assurer que LOG_DIR existe (normalement fait par config.py, mais redondance pour sûreté)
+os.makedirs(settings.LOG_DIR, exist_ok=True)
+log_file_path = os.path.join(settings.LOG_DIR, "app.log")
+file_handler = logging.FileHandler(log_file_path)
+# Utiliser le niveau de log de settings, converti en majuscules car logging.basicConfig prend un int ou une str.
+# logging.getLevelName peut convertir une string comme "INFO" en l'entier correspondant.
+log_level_setting = settings.LOG_LEVEL.upper()
+numeric_level = getattr(logging, log_level_setting, logging.INFO) # Défaut à INFO si invalide
+file_handler.setLevel(numeric_level)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(file_handler) # Ajouter le handler au logger racine
+
 logger = logging.getLogger(__name__)
+logger.info(f"Les logs seront écrits dans {log_file_path}") # Log pour confirmer la configuration
 
 # AJOUT POUR DÉBOGAGE DE VERSION DE FICHIER
 try:
