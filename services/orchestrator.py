@@ -303,7 +303,10 @@ class Orchestrator:
         Traite un chunk audio reçu du client.
         Utilise le VAD pour détecter la parole et déclenche le traitement approprié.
         """
-        logger.debug(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
+        logger.info(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
+        logger.info(f"Type de données audio: {type(audio_chunk)}")
+        logger.info(f"Premiers octets: {audio_chunk[:20] if len(audio_chunk) > 20 else audio_chunk}")
+        
         session = self.active_sessions.get(session_id)
         logger.info(f"État actuel de la session: {session.get('state', 'None') if session else 'None'}, speech_detected: {session.get('speech_detected', False) if session else False}, silence_duration: {session.get('silence_duration', 0) if session else 0}")
         if not session:
@@ -421,6 +424,9 @@ class Orchestrator:
         # Convertir le buffer audio en WAV pour l'ASR
         audio_data = session["current_audio_buffer"]
         logger.info(f"Taille du buffer audio: {len(audio_data)} bytes")
+        logger.info(f"Type de données audio: {type(audio_data)}")
+        logger.info(f"Premiers octets du buffer: {audio_data[:20] if len(audio_data) > 20 else audio_data}")
+        
         if len(audio_data) == 0:
             logger.warning("Buffer audio vide, abandon du traitement")
             session["state"] = SESSION_STATE_IDLE
