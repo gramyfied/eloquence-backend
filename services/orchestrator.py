@@ -184,12 +184,16 @@ class Orchestrator:
             # Message binaire (audio)
             if "bytes" in message:
                 audio_chunk = message["bytes"]
-                logger.info(f"Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
-                logger.info(f"Type de message: {type(message)}, clés: {message.keys()}")
+                print(f"AUDIO_DEBUG: Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
+                logger.critical(f"AUDIO_DEBUG: Reçu chunk audio de {len(audio_chunk)} bytes pour session {session_id}")
+                logger.critical(f"AUDIO_DEBUG: Type de message: {type(message)}, clés: {message.keys()}")
                 try:
                     await self._process_audio_chunk(session_id, audio_chunk)
                 except Exception as e:
-                    logger.error(f"Erreur lors du traitement du chunk audio: {e}", exc_info=True)
+                    error_msg = f"Erreur lors du traitement du chunk audio: {e}"
+                    print(f"AUDIO_ERROR: {error_msg}")
+                    logger.critical(f"AUDIO_ERROR: {error_msg}")
+                    logger.error(error_msg, exc_info=True)
             
             # Message texte (contrôle ou autre)
             elif "text" in message:
@@ -311,17 +315,21 @@ class Orchestrator:
         Traite un chunk audio reçu du client.
         Utilise le VAD pour détecter la parole et déclenche le traitement approprié.
         """
-        logger.info(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
-        logger.info(f"Type de données audio: {type(audio_chunk)}")
-        logger.info(f"Premiers octets: {audio_chunk[:20] if len(audio_chunk) > 20 else audio_chunk}")
+        print(f"AUDIO_DEBUG: _process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
+        logger.critical(f"AUDIO_DEBUG: _process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
+        logger.critical(f"AUDIO_DEBUG: Type de données audio: {type(audio_chunk)}")
+        logger.critical(f"AUDIO_DEBUG: Premiers octets: {audio_chunk[:20] if len(audio_chunk) > 20 else audio_chunk}")
         
         session = self.active_sessions.get(session_id)
-        logger.info(f"État actuel de la session: {session.get('state', 'None') if session else 'None'}, speech_detected: {session.get('speech_detected', False) if session else False}, silence_duration: {session.get('silence_duration', 0) if session else 0}")
+        logger.critical(f"AUDIO_DEBUG: État actuel de la session: {session.get('state', 'None') if session else 'None'}, speech_detected: {session.get('speech_detected', False) if session else False}, silence_duration: {session.get('silence_duration', 0) if session else 0}")
         if not session:
-            logger.error(f"Session {session_id} non trouvée")
+            error_msg = f"Session {session_id} non trouvée"
+            print(f"AUDIO_ERROR: {error_msg}")
+            logger.critical(f"AUDIO_ERROR: {error_msg}")
+            logger.error(error_msg)
             return
         
-        logger.info(f"État de la session {session_id} au début de _process_audio_chunk: {session['state']}")
+        logger.critical(f"AUDIO_DEBUG: État de la session {session_id} au début de _process_audio_chunk: {session['state']}")
 
         # Si l'IA est en train de parler et qu'on reçoit de l'audio, c'est une interruption
         if session["state"] == SESSION_STATE_IA_SPEAKING and not session["is_interrupted"]:
@@ -414,15 +422,22 @@ class Orchestrator:
         Traite la fin de la parole utilisateur.
         Déclenche la transcription ASR, puis la génération LLM et TTS.
         """
-        logger.info(f"Session {session_id}: Entering _process_user_speech_end. Current state: {self.active_sessions.get(session_id, {}).get('state')}")
+        print(f"AUDIO_DEBUG: Session {session_id}: Entering _process_user_speech_end. Current state: {self.active_sessions.get(session_id, {}).get('state')}")
+        logger.critical(f"AUDIO_DEBUG: Session {session_id}: Entering _process_user_speech_end. Current state: {self.active_sessions.get(session_id, {}).get('state')}")
         session = self.active_sessions.get(session_id)
         if not session:
-            logger.error(f"Session {session_id} non trouvée")
+            error_msg = f"Session {session_id} non trouvée"
+            print(f"AUDIO_ERROR: {error_msg}")
+            logger.critical(f"AUDIO_ERROR: {error_msg}")
+            logger.error(error_msg)
             return
         
         # Vérifier si la session est dans un état valide pour le traitement
         if session["state"] != SESSION_STATE_USER_SPEAKING and session["state"] != SESSION_STATE_PROCESSING:
-            logger.warning(f"État de session invalide pour le traitement: {session['state']}")
+            warning_msg = f"État de session invalide pour le traitement: {session['state']}"
+            print(f"AUDIO_WARNING: {warning_msg}")
+            logger.critical(f"AUDIO_WARNING: {warning_msg}")
+            logger.warning(warning_msg)
             return
         
         # Marquer le début du traitement
@@ -431,12 +446,16 @@ class Orchestrator:
         
         # Convertir le buffer audio en WAV pour l'ASR
         audio_data = session["current_audio_buffer"]
-        logger.info(f"Taille du buffer audio: {len(audio_data)} bytes")
-        logger.info(f"Type de données audio: {type(audio_data)}")
-        logger.info(f"Premiers octets du buffer: {audio_data[:20] if len(audio_data) > 20 else audio_data}")
+        print(f"AUDIO_DEBUG: Taille du buffer audio: {len(audio_data)} bytes")
+        logger.critical(f"AUDIO_DEBUG: Taille du buffer audio: {len(audio_data)} bytes")
+        logger.critical(f"AUDIO_DEBUG: Type de données audio: {type(audio_data)}")
+        logger.critical(f"AUDIO_DEBUG: Premiers octets du buffer: {audio_data[:20] if len(audio_data) > 20 else audio_data}")
         
         if len(audio_data) == 0:
-            logger.warning("Buffer audio vide, abandon du traitement")
+            warning_msg = "Buffer audio vide, abandon du traitement"
+            print(f"AUDIO_WARNING: {warning_msg}")
+            logger.critical(f"AUDIO_WARNING: {warning_msg}")
+            logger.warning(warning_msg)
             session["state"] = SESSION_STATE_IDLE
             return
         
@@ -458,21 +477,32 @@ class Orchestrator:
         vad_to_asr_time = time.time()
         # Utiliser la langue de la session ou "fr" par défaut
         language = "fr"  # Langue par défaut
-        logger.info(f"Session {session_id}: Début de la transcription ASR pour le segment {segment_id}...")
+        print(f"AUDIO_DEBUG: Session {session_id}: Début de la transcription ASR pour le segment {segment_id}...")
+        logger.critical(f"AUDIO_DEBUG: Session {session_id}: Début de la transcription ASR pour le segment {segment_id}...")
         asr_start_time_perf = time.perf_counter()
         try:
+            print(f"AUDIO_DEBUG: Appel de self.asr_service.transcribe avec {len(audio_data)} bytes audio")
+            logger.critical(f"AUDIO_DEBUG: Appel de self.asr_service.transcribe avec {len(audio_data)} bytes audio")
             transcription = await self.asr_service.transcribe(audio_data, language)
-            logger.info(f"Session {session_id}: Transcription ASR en cours avec {len(audio_data)} bytes audio")
+            print(f"AUDIO_DEBUG: Session {session_id}: Transcription ASR en cours avec {len(audio_data)} bytes audio")
+            logger.critical(f"AUDIO_DEBUG: Session {session_id}: Transcription ASR en cours avec {len(audio_data)} bytes audio")
             asr_time = time.time()
             asr_duration = time.perf_counter() - asr_start_time_perf
-            logger.info(f"Session {session_id}: Transcription ASR terminée en {asr_duration:.2f}s")
+            print(f"AUDIO_DEBUG: Session {session_id}: Transcription ASR terminée en {asr_duration:.2f}s")
+            logger.critical(f"AUDIO_DEBUG: Session {session_id}: Transcription ASR terminée en {asr_duration:.2f}s")
             
             if not transcription:
-                logger.warning("Transcription ASR vide, abandon du traitement")
+                warning_msg = "Transcription ASR vide, abandon du traitement"
+                print(f"AUDIO_WARNING: {warning_msg}")
+                logger.critical(f"AUDIO_WARNING: {warning_msg}")
+                logger.warning(warning_msg)
                 session["state"] = SESSION_STATE_IDLE
                 return
         except Exception as e:
-            logger.error(f"Erreur lors de la transcription ASR: {e}", exc_info=True)
+            error_msg = f"Erreur lors de la transcription ASR: {e}"
+            print(f"AUDIO_ERROR: {error_msg}")
+            logger.critical(f"AUDIO_ERROR: {error_msg}")
+            logger.error(error_msg, exc_info=True)
             session["state"] = SESSION_STATE_IDLE
             await self._send_message(session_id, {
                 "type": "error",
