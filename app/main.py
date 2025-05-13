@@ -75,6 +75,17 @@ async def startup_event():
     # Initialisation de la base de données
     await init_db()
     logger.info("Base de données initialisée avec succès")
+    
+    # Préchargement du modèle ASR
+    try:
+        from services.asr_service import AsrService
+        logger.info("Préchargement du modèle ASR...")
+        asr_service = AsrService()
+        await asr_service.load_model()
+        logger.info("Modèle ASR préchargé avec succès")
+    except Exception as e:
+        logger.error(f"Erreur lors du préchargement du modèle ASR: {e}", exc_info=True)
+        logger.warning("L'application continuera sans préchargement du modèle ASR")
 
 # Événement d'arrêt
 @app.on_event("shutdown")

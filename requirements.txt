@@ -26,3 +26,4 @@ pytest-asyncio>=0.21.0
 pytest-mock>=3.11.0  # Pour faciliter le mocking
 httpx>=0.24.0
 python-multipart>=0.0.6  # Pour le support des formulaires multipart
+coqui_tts

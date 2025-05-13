@@ -14,6 +14,11 @@ def set_orchestrator(orchestrator):
     _orchestrator_instance = orchestrator
     return orchestrator
 
+def get_orchestrator_instance():
+    # Récupère l'instance globale de l'orchestrateur
+    global _orchestrator_instance
+    return _orchestrator_instance
+
 from typing import Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
@@ -36,7 +41,13 @@ async def get_orchestrator(db: AsyncSession = Depends(get_db)) -> Orchestrator:
     Récupère l'instance singleton de l'Orchestrateur.
     L'initialise si nécessaire.
     """
-    global orchestrator
+    global orchestrator, _orchestrator_instance
+    
+    # Si l'orchestrateur global est défini, l'utiliser
+    if _orchestrator_instance is not None:
+        return _orchestrator_instance
+    
+    # Sinon, utiliser l'orchestrateur local ou en créer un nouveau
     if orchestrator is None:
         orchestrator = Orchestrator(db)
         await orchestrator.initialize()
@@ -134,74 +145,3 @@ async def debug_websocket_endpoint(
             await orchestrator.disconnect_client(session_id)
         except:
             pass
-
-@router.websocket("/ws/simple/{session_id}")
-async def simple_websocket_endpoint(
-    websocket: WebSocket,
-    session_id: str,
-    orchestrator: Orchestrator = Depends(get_orchestrator),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Point d'entrée WebSocket simplifié pour l'application mobile.
-    Accepte les connexions sans authentification.
-    """
-    logger.info(f"Nouvelle connexion WebSocket simple entrante pour session {session_id}")
-    
-    # Variable pour suivre l'état de la connexion
-    connection_active = True
-    
-    try:
-        # Accepter explicitement la connexion avant de la passer à l'orchestrateur
-        await websocket.accept()
-        logger.info(f"Connexion WebSocket acceptée pour session {session_id}")
-        
-        # Envoyer un message de confirmation de connexion
-        await websocket.send_json({
-            "type": "connection_status",
-            "status": "connected",
-            "session_id": session_id,
-            "message": "Connexion WebSocket établie avec succès"
-        })
-        
-        # Connecter le client à l'orchestrateur
-        await orchestrator.connect_client(websocket, session_id)
-        logger.info(f"Client connecté à l'orchestrateur pour session {session_id}")
-        
-        # Boucle de traitement des messages avec timeout
-        while connection_active:
-            try:
-                # Utiliser wait_for pour éviter de bloquer indéfiniment
-                logger.info(f"En attente de message WebSocket simple pour session {session_id}...")
-                await orchestrator.process_websocket_message(websocket, session_id)
-                logger.info(f"Message WebSocket simple traité pour session {session_id}.")
-            except WebSocketDisconnect:
-                logger.info(f"Client déconnecté de la session simple {session_id}")
-                connection_active = False
-                break
-            except Exception as e:
-                logger.error(f"Erreur lors du traitement du message: {e}")
-                # Envoyer un message d'erreur au client si possible
-                try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Erreur lors du traitement du message: {str(e)}"
-                    })
-                except:
-                    # Si l'envoi échoue, la connexion est probablement fermée
-                    connection_active = False
-                    break
-    
-    except WebSocketDisconnect:
-        logger.info(f"Client déconnecté de la session simple {session_id}")
-    
-    except Exception as e:
-        logger.error(f"Erreur WebSocket simple: {e}", exc_info=True)
-    
-    finally:
-        # Toujours nettoyer la connexion, quelle que soit la raison de la sortie
-        logger.info(f"Nettoyage de la connexion pour session {session_id}")
-        try:
-            await orchestrator.disconnect_client(session_id)
-        except Exception as cleanup_error:
-            logger.error(f"Erreur lors du nettoyage de la connexion: {cleanup_error}")

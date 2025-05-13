@@ -24,6 +24,7 @@ from services.vad_service import VadService
 from services.asr_service import AsrService
 from services.llm_service import LlmService
 from services.tts_service import TtsService
+from services.tts_stream_service import tts_stream_service
 from services.kaldi_service import kaldi_service
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class Orchestrator:
         self.asr_service = AsrService()
         self.llm_service = LlmService()
         self.tts_service = TtsService()
+        self.tts_stream_service = tts_stream_service  # Service TTS avec streaming
         
         # État de la session
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -190,18 +192,18 @@ class Orchestrator:
                     data = json.loads(message["text"])
                     msg_type = data.get("type")
                     
-                    logger.info(f"Message texte reçu: {data}")
-                    logger.info(f"Type de message: {msg_type}")
+                    logger.debug(f"Message texte reçu: {data}")
+                    logger.debug(f"Type de message: {msg_type}")
                     
                     if msg_type == WS_MSG_CONTROL:
                         # Message de contrôle (interruption, etc.)
                         event = data.get("event")
-                        logger.info(f"Événement de contrôle: {event}")
+                        logger.debug(f"Événement de contrôle: {event}")
                         await self._process_control_event(session_id, event)
                     elif msg_type == "text":
                         # Message texte simple (chat, commande, etc.)
                         content = data.get("content", "")
-                        logger.info(f"Message texte simple reçu: {content}")
+                        logger.debug(f"Message texte simple reçu: {content}")
                         # Envoyer une confirmation de réception
                         await self._send_message(session_id, {
                             "type": "text_response",
@@ -225,7 +227,7 @@ class Orchestrator:
                 await self._send_error(session_id, "Format de message non pris en charge")
         
         except asyncio.TimeoutError:
-            logger.info(f"Timeout en attendant un message pour la session {session_id}")
+            logger.debug(f"Timeout en attendant un message pour la session {session_id}")
             # Envoyer un heartbeat pour maintenir la connexion active
             try:
                 await self._send_message(session_id, {
@@ -246,11 +248,16 @@ class Orchestrator:
             # Gérer spécifiquement l'erreur "Cannot call 'receive' once a disconnect message has been received"
             if "Cannot call 'receive' once a disconnect message has been received" in str(e):
                 logger.info(f"Client déjà déconnecté pour session {session_id}")
+                # Ne pas essayer d'envoyer un message d'erreur, simplement lever une exception WebSocketDisconnect
                 raise WebSocketDisconnect(code=1000)
             else:
                 # Autres erreurs RuntimeError
                 logger.error(f"Erreur RuntimeError lors du traitement du message WebSocket: {e}", exc_info=True)
-                await self._send_error(session_id, f"Erreur interne: {str(e)}")
+                try:
+                    await self._send_error(session_id, f"Erreur interne: {str(e)}")
+                except Exception as send_error:
+                    logger.warning(f"Impossible d'envoyer le message d'erreur: {send_error}")
+                    raise WebSocketDisconnect(code=1001)
         
         except Exception as e:
             logger.error(f"Erreur lors du traitement du message WebSocket: {e}", exc_info=True)
@@ -266,8 +273,9 @@ class Orchestrator:
         Traite un chunk audio reçu du client.
         Utilise le VAD pour détecter la parole et déclenche le traitement approprié.
         """
-        logger.info(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
+        logger.debug(f"_process_audio_chunk appelé pour session {session_id} avec {len(audio_chunk)} bytes.")
         session = self.active_sessions.get(session_id)
+        logger.info(f"État actuel de la session: {session.get('state', 'None') if session else 'None'}, speech_detected: {session.get('speech_detected', False) if session else False}, silence_duration: {session.get('silence_duration', 0) if session else 0}")
         if not session:
             logger.error(f"Session {session_id} non trouvée")
             return
@@ -276,7 +284,7 @@ class Orchestrator:
 
         # Si l'IA est en train de parler et qu'on reçoit de l'audio, c'est une interruption
         if session["state"] == SESSION_STATE_IA_SPEAKING and not session["is_interrupted"]:
-            logger.info(f"Interruption potentielle détectée par audio entrant pendant que l'IA parle.")
+            logger.debug(f"Interruption potentielle détectée par audio entrant pendant que l.IA parle.")
             await self._process_control_event(session_id, CONTROL_USER_INTERRUPT)
         
         # Mettre à jour l'état
@@ -298,7 +306,7 @@ class Orchestrator:
         is_speech = vad_result["is_speech"]
         confidence = vad_result["confidence"]
         
-        logger.debug(f"Résultat VAD: speech_prob={speech_prob:.2f}, is_speech={is_speech}, confidence={confidence:.2f}")
+        logger.info(f"VAD RESULT: {vad_result} - is_speech={is_speech}, speech_prob={speech_prob:.2f if speech_prob is not None else 0.0}, confidence={confidence:.2f if confidence is not None else 0.0}")
 
         if speech_prob is not None:
             current_time = time.time()
@@ -365,6 +373,7 @@ class Orchestrator:
         Traite la fin de la parole utilisateur.
         Déclenche la transcription ASR, puis la génération LLM et TTS.
         """
+        logger.info(f"Session {session_id}: Entering _process_user_speech_end. Current state: {self.active_sessions.get(session_id, {}).get('state')}")
         session = self.active_sessions.get(session_id)
         if not session or session["state"] != SESSION_STATE_USER_SPEAKING:
             return
@@ -398,8 +407,13 @@ class Orchestrator:
         vad_to_asr_time = time.time()
         # Utiliser la langue de la session ou "fr" par défaut
         language = "fr"  # Langue par défaut
+        logger.info(f"Session {session_id}: Début de la transcription ASR pour le segment {segment_id}...")
+        asr_start_time_perf = time.perf_counter()
         transcription = await self.asr_service.transcribe(audio_data, language)
+        logger.info(f"Session {session_id}: Transcription ASR en cours avec {len(audio_data)} bytes audio")
         asr_time = time.time()
+        asr_duration = time.perf_counter() - asr_start_time_perf
+        logger.info(f"Session {session_id}: Transcription ASR terminée en {asr_duration:.2f}s")
         
         if not transcription:
             logger.warning("Transcription ASR vide, abandon du traitement")
@@ -444,10 +458,10 @@ class Orchestrator:
                 session["scenario_context"]["current_step"] = updates["next_step"]
                 logger.info(f"  -> Nouvelle étape du scénario: {updates['next_step']}")
             if "variables" in updates and isinstance(updates["variables"], dict):
-                 if "variables" not in session["scenario_context"]:
-                      session["scenario_context"]["variables"] = {}
-                 session["scenario_context"]["variables"].update(updates["variables"])
-                 logger.info(f"  -> Variables du scénario mises à jour: {updates['variables']}")
+                if "variables" not in session["scenario_context"]:
+                    session["scenario_context"]["variables"] = {}
+                session["scenario_context"]["variables"].update(updates["variables"])
+                logger.info(f"  -> Variables du scénario mises à jour: {updates['variables']}")
             # Potentiellement ajouter d'autres logiques de mise à jour ici
         
         # Synthèse vocale TTS
@@ -461,7 +475,7 @@ class Orchestrator:
         session["state"] = SESSION_STATE_IA_SPEAKING
         
         # Générer l'audio TTS et l'envoyer en streaming
-        audio_stream = await self.tts_service.synthesize_stream(
+        audio_stream = await self.tts_stream_service.synthesize_stream(
             text_response,
             session_id=session_id,
             emotion=emotion_label,
@@ -512,31 +526,43 @@ class Orchestrator:
         await self._save_session_data(session_id)
         
         logger.info(f"Traitement complet en {tts_end_time - start_time:.2f}s")
-    
-    async def _process_control_event(self, session_id: str, event: str):
+
+
+    async def _process_control_event(self, session_id: str, event: str) -> None:
         """
         Traite les événements de contrôle envoyés par le client.
+        
+        Args:
+            session_id: Identifiant de la session
+            event: Type d'événement à traiter
         """
-        logger.info(f"_process_control_event appelé avec session_id={session_id}, event={event}")
+        logger.debug(f"_process_control_event appelé avec session_id={session_id}, event={event}")
         
         session = self.active_sessions.get(session_id)
         if not session:
             logger.error(f"Session {session_id} non trouvée")
+            await self._send_error(session_id, f"Session {session_id} non trouvée")
             return
-        
+
+        try:
+            logger.debug(f"État actuel de la session: {session.get('state', 'None')}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'accès à l'état de la session {session_id}: {e}")
+            await self._send_error(session_id, "Erreur interne du serveur")
+            return
         logger.info(f"État de la session: {session['state']}")
-        logger.info(f"SESSION_STATE_IA_SPEAKING: {SESSION_STATE_IA_SPEAKING}")
+        logger.debug(f"SESSION_STATE_IA_SPEAKING: {SESSION_STATE_IA_SPEAKING}")
         
         if event == CONTROL_USER_INTERRUPT:
-            logger.info("Événement CONTROL_USER_INTERRUPT détecté")
+            logger.debug("Événement CONTROL_USER_INTERRUPT détecté")
             # L'utilisateur interrompt l'IA
             if session["state"] == SESSION_STATE_IA_SPEAKING:
-                logger.info("Interruption détectée, arrêt du TTS")
+                logger.debug("Interruption détectée, arrêt du TTS")
                 session["is_interrupted"] = True
                 
                 # Arrêter le TTS via le service TTS
-                logger.info(f"Appel de stop_generation avec session_id={session_id}")
-                await self.tts_service.stop_generation(session_id) # Renommé
+                logger.debug(f"Appel de stop_generation avec session_id={session_id}")
+                await self.tts_stream_service.stop_generation(session_id) # Renommé
                 
                 # Informer le client que l'IA a arrêté de parler
                 message = {
@@ -628,7 +654,7 @@ class Orchestrator:
 
             session["state"] = SESSION_STATE_IA_SPEAKING # L'IA (relance) parle
 
-            audio_stream = await self.tts_service.synthesize_stream(
+            audio_stream = await self.tts_stream_service.synthesize_stream(
                 text_response,
                 session_id=session_id,
                 emotion=emotion_label,
@@ -642,7 +668,7 @@ class Orchestrator:
                  # Ou si une déconnexion/erreur est survenue
                 if session["state"] != SESSION_STATE_IA_SPEAKING:
                     logger.info("Relance douce interrompue (état a changé).")
-                    await self.tts_service.stop_generation(session_id) # Arrêter TTS
+                    await self.tts_stream_service.stop_generation(session_id) # Arrêter TTS
                     stream_interrupted = True
                     break
                 await self._send_binary(session_id, audio_chunk)
@@ -650,22 +676,22 @@ class Orchestrator:
 
             # Si la relance n'a pas été interrompue par un changement d'état externe
             if not stream_interrupted and session["state"] == SESSION_STATE_IA_SPEAKING:
-                 session["state"] = SESSION_STATE_USER_SPEAKING # Revenir à l'écoute de l'utilisateur
-                 await self._send_message(session_id, {
-                     "type": WS_MSG_AUDIO_CONTROL,
-                     "event": AUDIO_IA_SPEECH_END
-                 })
-                 # Réinitialiser le timer de silence pour éviter boucle infinie
-                 session["last_speech_time"] = time.time()
-                 session["silence_duration"] = 0
-                 logger.info(f"Session {session_id}: Fin relance douce, retour à l'écoute.")
+                session["state"] = SESSION_STATE_USER_SPEAKING # Revenir à l'écoute de l'utilisateur
+                await self._send_message(session_id, {
+                    "type": WS_MSG_AUDIO_CONTROL,
+                    "event": AUDIO_IA_SPEECH_END
+                })
+                # Réinitialiser le timer de silence pour éviter boucle infinie
+                session["last_speech_time"] = time.time()
+                session["silence_duration"] = 0
+                logger.info(f"Session {session_id}: Fin relance douce, retour à l'écoute.")
 
         except Exception as e:
             logger.error(f"Erreur lors de la génération de la relance douce: {e}", exc_info=True)
             # Revenir à l'état d'écoute initial en cas d'erreur
             if session["state"] in [SESSION_STATE_PROCESSING, SESSION_STATE_IA_SPEAKING]:
-                 session["state"] = original_state # Revenir à l'état avant la tentative de relance
-                 # Envoyer un message d'erreur ? Optionnel.
+                session["state"] = original_state # Revenir à l'état avant la tentative de relance
+                # Envoyer un message d'erreur ? Optionnel.
 
     # Les méthodes suivantes doivent être correctement indentées au niveau de la classe
     async def _save_session_data(self, session_id: str):
@@ -703,16 +729,29 @@ class Orchestrator:
         Envoie un message JSON au client WebSocket.
         Gère correctement les erreurs de connexion.
         """
-        logger.info(f"_send_message appelé avec session_id={session_id}, message={message}")
+        logger.debug(f"_send_message appelé avec session_id={session_id}, message={message}")
         
         websocket = self.connected_clients.get(session_id)
-        logger.info(f"WebSocket trouvé: {websocket is not None}")
+        logger.debug(f"WebSocket trouvé: {websocket is not None}")
         
         if websocket:
             try:
-                logger.info(f"Appel de send_json avec message={message}")
+                logger.debug(f"Appel de send_json avec message={message}")
                 await websocket.send_json(message)
-                logger.info("send_json appelé avec succès")
+                logger.debug("send_json appelé avec succès")
+            except RuntimeError as e:
+                # Gérer spécifiquement l'erreur "Unexpected ASGI message 'websocket.send'"
+                if "Unexpected ASGI message 'websocket.send'" in str(e):
+                    logger.warning(f"Tentative d'envoi de message à un client déjà déconnecté: {session_id}")
+                    # Ne pas essayer de déconnecter le client, il est déjà déconnecté
+                    # Supprimer le client de la liste des clients connectés
+                    if session_id in self.connected_clients:
+                        del self.connected_clients[session_id]
+                else:
+                    # Autres erreurs RuntimeError
+                    logger.error(f"Erreur RuntimeError lors de l'envoi du message JSON: {e}", exc_info=True)
+                    # Déconnecter le client si une erreur se produit
+                    await self.disconnect_client(session_id)
             except Exception as e:
                 logger.error(f"Erreur lors de l'envoi du message JSON: {e}", exc_info=True)
                 # Déconnecter le client si une erreur se produit

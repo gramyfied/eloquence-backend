@@ -11,6 +11,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPExce
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from services.orchestrator import Orchestrator
+from app.routes.websocket import get_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ active_connections = {}
 async def websocket_simple_endpoint(
     websocket: WebSocket,
     session_id: str,
+    orchestrator: Orchestrator = Depends(get_orchestrator),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -47,46 +50,29 @@ async def websocket_simple_endpoint(
             "message": f"Bienvenue dans la session {session_id}!"
         })
         
+        # Connecter le client à l'orchestrateur
+        await orchestrator.connect_client(websocket, session_id)
+        logger.info(f"Client connecté à l'orchestrateur pour session {session_id}")
+        
         # Boucle de traitement des messages
         while True:
-            # Attendre un message
-            message = await websocket.receive()
-            logger.info(f"Message reçu pour session {session_id}: {message}")
-            
-            # Message binaire (audio)
-            if "bytes" in message:
-                # Simplement renvoyer les données audio reçues
-                await websocket.send_bytes(message["bytes"])
-            
-            # Message texte (contrôle)
-            elif "text" in message:
-                try:
-                    data = json.loads(message["text"])
-                    # Renvoyer le message reçu
-                    await websocket.send_json({
-                        "type": "echo",
-                        "data": data
-                    })
-                except json.JSONDecodeError:
-                    logger.error("Message JSON invalide")
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Message JSON invalide"
-                    })
-            
-            else:
-                logger.warning("Format de message WebSocket non pris en charge")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Format de message non pris en charge"
-                })
+            logger.info(f"En attente de message WebSocket pour session {session_id}...")
+            await orchestrator.process_websocket_message(websocket, session_id)
+            logger.info(f"Message WebSocket traité pour session {session_id}.")
     
     except WebSocketDisconnect:
         logger.info(f"Client déconnecté de la session {session_id}")
         if session_id in active_connections:
             del active_connections[session_id]
+        # Déconnecter le client de l'orchestrateur
+        await orchestrator.disconnect_client(session_id)
     
     except Exception as e:
         logger.error(f"Erreur WebSocket: {e}", exc_info=True)
         if session_id in active_connections:
             del active_connections[session_id]
+        # Tenter de déconnecter le client de l'orchestrateur
+        try:
+            await orchestrator.disconnect_client(session_id)
+        except:
+            pass

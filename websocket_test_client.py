@@ -4,7 +4,7 @@ import json
 import sys
 
 async def test_websocket(session_id):
-    uri = f"ws://localhost:8083/ws/{session_id}"
+    uri = f"ws://localhost:8083/ws/simple/{session_id}"
     print(f"Connecting to {uri}...")
     
     try:

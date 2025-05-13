@@ -194,7 +194,28 @@ class LlmService:
                             content = content.replace(f"[EMOTION: {target_emotion}]", "").strip()
                             break
                     
-                    return {"text": content, "emotion": emotion}
+                    # Extraire les mises à jour de scénario si présentes
+                    scenario_updates = None
+                    if "```json" in content:
+                        try:
+                            # Extraire le JSON entre les balises ```json et ```
+                            json_start = content.find("```json")
+                            json_end = content.find("```", json_start + 7)
+                            if json_start != -1 and json_end != -1:
+                                json_str = content[json_start + 7:json_end].strip()
+                                json_data = json.loads(json_str)
+                                if "scenario_updates" in json_data:
+                                    scenario_updates = json_data["scenario_updates"]
+                                    # Supprimer le bloc JSON de la réponse
+                                    content = content[:json_start].strip() + " " + content[json_end + 3:].strip()
+                        except Exception as e:
+                            logger.warning(f"Erreur lors de l'extraction des mises à jour de scénario: {e}")
+                    
+                    result = {"text": content, "emotion": emotion}
+                    if scenario_updates:
+                        result["scenario_updates"] = scenario_updates
+                    
+                    return result
             finally:
                 await session.close()
         except asyncio.TimeoutError:
@@ -258,7 +279,28 @@ class LlmService:
                             content = content.replace(f"[EMOTION: {target_emotion}]", "").strip()
                             break
                     
-                    return {"text": content, "emotion": emotion}
+                    # Extraire les mises à jour de scénario si présentes
+                    scenario_updates = None
+                    if "```json" in content:
+                        try:
+                            # Extraire le JSON entre les balises ```json et ```
+                            json_start = content.find("```json")
+                            json_end = content.find("```", json_start + 7)
+                            if json_start != -1 and json_end != -1:
+                                json_str = content[json_start + 7:json_end].strip()
+                                json_data = json.loads(json_str)
+                                if "scenario_updates" in json_data:
+                                    scenario_updates = json_data["scenario_updates"]
+                                    # Supprimer le bloc JSON de la réponse
+                                    content = content[:json_start].strip() + " " + content[json_end + 3:].strip()
+                        except Exception as e:
+                            logger.warning(f"Erreur lors de l'extraction des mises à jour de scénario: {e}")
+                    
+                    result = {"text": content, "emotion": emotion}
+                    if scenario_updates:
+                        result["scenario_updates"] = scenario_updates
+                    
+                    return result
             finally:
                 await session.close()
         except asyncio.TimeoutError:
@@ -267,3 +309,83 @@ class LlmService:
         except Exception as e:
             logger.error(f"Erreur lors de la génération TGI: {e}")
             return {"text": f"Erreur du service LLM: {str(e)}", "emotion": "neutre"}
+            
+    async def generate_exercise_text(self, exercise_type: str, topic: Optional[str] = None, difficulty: Optional[str] = "moyen", length: Optional[str] = "court") -> str:
+        """
+        Génère le texte pour un exercice de coaching en utilisant le LLM.
+
+        Args:
+            exercise_type (str): Type d'exercice (ex: "présentation", "entretien d'embauche").
+            topic (Optional[str]): Sujet de l'exercice.
+            difficulty (Optional[str]): Difficulté de l'exercice ("facile", "moyen", "difficile").
+            length (Optional[str]): Longueur souhaitée du texte ("court", "moyen", "long").
+
+        Returns:
+            str: Le texte généré pour l'exercice.
+
+        Raises:
+            Exception: Si la génération échoue.
+        """
+        logger.info(f"Appel LLM pour générer un exercice: type={exercise_type}, topic={topic}, difficulty={difficulty}, length={length}")
+
+        # Construire le prompt pour la génération d'exercice
+        exercise_prompt_parts = [
+            "Génère un texte pour un exercice de coaching vocal.",
+            f"Type d'exercice: {exercise_type}.",
+            f"Difficulté: {difficulty}.",
+            f"Longueur: {length}."
+        ]
+        if topic:
+            exercise_prompt_parts.append(f"Sujet: {topic}.")
+
+        exercise_prompt = " ".join(exercise_prompt_parts)
+
+        # Préparer les messages pour l'API
+        messages = [
+            {"role": "system", "content": "Tu es un générateur de texte pour des exercices de coaching vocal. Ton objectif est de créer des textes pertinents et adaptés aux paramètres demandés."},
+            {"role": "user", "content": exercise_prompt}
+        ]
+
+        headers = {'Content-Type': 'application/json'}
+        
+        if self.backend == 'vllm':
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0.7,  # Température spécifique pour la créativité de l'exercice
+                "max_tokens": 500  # Limiter la longueur de l'exercice
+            }
+            
+            try:
+                # Créer une session HTTP asynchrone
+                session = aiohttp.ClientSession(timeout=self.timeout)
+                try:
+                    # Faire la requête POST
+                    async with session.post(self.api_url, json=payload, headers=headers) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            logger.error(f"Erreur API LLM pour génération d'exercice {response.status}: {error_text}")
+                            raise Exception(f"Erreur du service LLM lors de la génération d'exercice: {response.status}")
+
+                        response_json = await response.json()
+                        
+                        # Extraire le texte de la réponse
+                        if "choices" in response_json and len(response_json["choices"]) > 0:
+                            content = response_json["choices"][0]["message"]["content"]
+                        else:
+                            logger.error(f"Format de réponse LLM inattendu pour génération d'exercice: {response_json}")
+                            raise Exception("Erreur: format de réponse LLM inattendu pour génération d'exercice")
+
+                        logger.info(f"Texte d'exercice généré (début): '{content[:100]}...'")
+                        return content.strip()
+                finally:
+                    await session.close()
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout lors de la requête LLM pour génération d'exercice après {self.timeout.total} secondes")
+                raise Exception(f"Erreur de connexion au service LLM pour génération d'exercice: Timeout")
+            except Exception as e:
+                logger.error(f"Erreur lors de la génération de l'exercice LLM: {e}")
+                raise Exception(f"Erreur du service LLM lors de la génération d'exercice: {str(e)}")
+        else:
+            # Pour TGI ou autres backends non supportés
+            raise Exception(f"Backend {self.backend} non supporté pour la génération d'exercice")

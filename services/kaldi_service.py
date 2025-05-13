@@ -358,11 +358,8 @@ class KaldiService:
                 except Exception as parse_err:
                     logger.error(f"Erreur parsing fichier CTM {ctm_file}: {parse_err}")
             
-            # Simuler des résultats de prosodie
-            prosody_results = {
-                "pitch_variation": round(np.random.uniform(20, 60), 1),
-                "energy_variation": round(np.random.uniform(5, 15), 1)
-            }
+            # Analyser la prosodie à partir des résultats de l'alignement
+            prosody_results = await self._analyze_prosody(host_align_dir, audio_np)
             
             # Générer un feedback personnalisé
             all_results = {
@@ -459,6 +456,117 @@ class KaldiService:
         logger.info(f"Planification de l'analyse Kaldi pour session {session_id}, turn_id {turn_id}")
         # Utiliser .delay() pour envoyer la tâche à la file d'attente Celery
         run_kaldi_analysis.delay(session_id, str(turn_id), audio_bytes, transcription) # Passer turn_id comme string
+        
+    async def _analyze_prosody(self, align_dir: str, audio_np: np.ndarray) -> Dict[str, Any]:
+        """
+        Analyse la prosodie à partir des résultats de l'alignement Kaldi et de l'audio.
+        
+        Args:
+            align_dir: Répertoire contenant les fichiers d'alignement Kaldi
+            audio_np: Audio sous forme de numpy array
+            
+        Returns:
+            Dict[str, Any]: Métriques de prosodie
+        """
+        try:
+            import librosa
+            
+            # Extraire les caractéristiques prosodiques avec librosa
+            # 1. Extraire le pitch (F0) avec librosa
+            sample_rate = 16000  # Taux d'échantillonnage standard pour Kaldi
+            pitches, magnitudes = librosa.core.piptrack(y=audio_np.astype(np.float32) / 32768.0, sr=sample_rate)
+            
+            # Filtrer les valeurs non nulles de pitch
+            pitches_nonzero = pitches[pitches > 0]
+            if len(pitches_nonzero) > 0:
+                pitch_mean = np.mean(pitches_nonzero)
+                pitch_std = np.std(pitches_nonzero)
+                pitch_min = np.min(pitches_nonzero)
+                pitch_max = np.max(pitches_nonzero)
+                pitch_range = pitch_max - pitch_min
+            else:
+                pitch_mean = 0
+                pitch_std = 0
+                pitch_range = 0
+            
+            # 2. Extraire l'énergie (RMS)
+            energy = librosa.feature.rms(y=audio_np.astype(np.float32) / 32768.0)[0]
+            energy_mean = np.mean(energy)
+            energy_std = np.std(energy)
+            energy_range = np.max(energy) - np.min(energy)
+            
+            # 3. Calculer la variation relative
+            pitch_variation = (pitch_std / pitch_mean * 100) if pitch_mean > 0 else 0
+            energy_variation = (energy_std / energy_mean * 100) if energy_mean > 0 else 0
+            
+            # 4. Analyser le rythme en utilisant les onsets (débuts de notes/syllabes)
+            onset_env = librosa.onset.onset_strength(y=audio_np.astype(np.float32) / 32768.0, sr=sample_rate)
+            tempo, _ = librosa.beat.beat_track(onset_envelope=onset_env, sr=sample_rate)
+            
+            # 5. Analyser les segments de parole et de silence à partir du fichier CTM
+            ctm_file = os.path.join(align_dir, "ali.1.ctm")
+            speech_segments = []
+            if os.path.exists(ctm_file):
+                with open(ctm_file, 'r') as f:
+                    lines = f.readlines()
+                    
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        try:
+                            start_time = float(parts[2])
+                            duration = float(parts[3])
+                            word = parts[4]
+                            
+                            speech_segments.append({
+                                "start": start_time,
+                                "end": start_time + duration,
+                                "word": word
+                            })
+                        except (ValueError, IndexError):
+                            continue
+            
+            # 6. Calculer les variations de rythme entre les segments
+            if len(speech_segments) > 1:
+                gaps = []
+                for i in range(1, len(speech_segments)):
+                    gap = speech_segments[i]["start"] - speech_segments[i-1]["end"]
+                    if gap > 0:  # Ignorer les chevauchements
+                        gaps.append(gap)
+                
+                rhythm_variation = np.std(gaps) / np.mean(gaps) * 100 if gaps and np.mean(gaps) > 0 else 0
+            else:
+                rhythm_variation = 0
+            
+            # Construire et retourner les résultats
+            prosody_metrics = {
+                "pitch_variation": round(pitch_variation, 1),
+                "energy_variation": round(energy_variation, 1),
+                "rhythm_variation": round(rhythm_variation, 1),
+                "tempo": round(tempo, 1),
+                "detailed_metrics": {
+                    "pitch_mean": round(float(pitch_mean), 2),
+                    "pitch_std": round(float(pitch_std), 2),
+                    "pitch_range": round(float(pitch_range), 2),
+                    "energy_mean": round(float(energy_mean), 2),
+                    "energy_std": round(float(energy_std), 2),
+                    "energy_range": round(float(energy_range), 2)
+                }
+            }
+            
+            logger.info(f"Métriques de prosodie calculées: {prosody_metrics}")
+            return prosody_metrics
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de l'analyse de la prosodie: {e}", exc_info=True)
+            # En cas d'erreur, retourner des valeurs par défaut
+            return {
+                "pitch_variation": 30.0,
+                "energy_variation": 10.0,
+                "rhythm_variation": 20.0,
+                "tempo": 120.0,
+                "error": str(e)
+            }
 
 
 @celery_app.task(name="services.kaldi_service.run_kaldi_analysis", bind=True, max_retries=1)

@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 150 # Max tokens par défaut (peut être surchargé par LLM_MAX_MAX_TOKENS)
     LLM_MAX_MAX_TOKENS: int = 512 # Max tokens pour Scaleway (selon l'exemple utilisateur)
-    LLM_TIMEOUT_S: int = 30  # Timeout en secondes
+    LLM_TIMEOUT_S: int = 10  # Timeout en secondes (réduit pour éviter les blocages)
 
     # TTS (Coqui TTS)
     TTS_API_URL: str = "http://localhost:5002/api/tts"
