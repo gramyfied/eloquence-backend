@@ -2,6 +2,7 @@
 """
 API minimaliste pour Eloquence avec support des anciens endpoints.
 Cette API est compatible avec l'application Flutter existante.
+Inclut des mesures de sécurité renforcées pour le backend interne.
 """
 
 import os
@@ -9,10 +10,14 @@ import uuid
 import json
 import logging
 import asyncio
+import secrets
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
-from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.security import APIKeyHeader
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, validator, Field
 from dotenv import load_dotenv
 import jwt
 import time
@@ -36,32 +41,68 @@ LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
 # Configuration API
 API_KEY = os.environ.get("API_KEY", "default-key")
 API_PORT = int(os.environ.get("API_PORT", "9090"))  # Utiliser le port 9090 par défaut
+JWT_SECRET = os.environ.get("JWT_SECRET", secrets.token_hex(32))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION = 3600  # 1 heure
+
+# Configuration de sécurité
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,https://eloquence.app").split(",")
 
 # Créer l'application FastAPI
-app = FastAPI(title="Eloquence API", version="1.0.0")
+app = FastAPI(
+    title="Eloquence API Sécurisée",
+    version="1.0.0",
+    docs_url=None if os.environ.get("ENVIRONMENT") == "production" else "/docs",
+    redoc_url=None if os.environ.get("ENVIRONMENT") == "production" else "/redoc"
+)
 
-# Configurer CORS pour permettre les requêtes depuis le frontend Flutter
+# Configurer CORS pour permettre les requêtes uniquement depuis les origines autorisées
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # À remplacer par les origines spécifiques en production
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    max_age=86400,  # 24 heures
 )
 
 # Stockage en mémoire des sessions actives
 active_sessions = {}
 
-# Modèles de données
+# Stockage en mémoire des tentatives de connexion échouées
+failed_attempts = {}
+
+# Schéma de sécurité pour l'API key
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# Modèles de données avec validation
 class SessionStartRequest(BaseModel):
-    user_id: str
-    language: str = "fr"
-    scenario_id: str
+    user_id: str = Field(..., min_length=3, max_length=50)
+    language: str = Field("fr", min_length=2, max_length=5)
+    scenario_id: str = Field(..., min_length=3, max_length=50)
     is_multi_agent: bool = False
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        if not v.isalnum() and not '_' in v:
+            raise ValueError('user_id doit être alphanumérique ou contenir des underscores')
+        return v
+    
+    @validator('scenario_id')
+    def validate_scenario_id(cls, v):
+        if not v.isalnum() and not '_' in v and not '-' in v:
+            raise ValueError('scenario_id doit être alphanumérique ou contenir des underscores/tirets')
+        return v
 
 class LiveKitTokenRequest(BaseModel):
-    room_name: str
-    participant_identity: str
+    room_name: str = Field(..., min_length=3, max_length=50)
+    participant_identity: str = Field(..., min_length=3, max_length=50)
+    
+    @validator('room_name', 'participant_identity')
+    def validate_fields(cls, v):
+        if not v.isalnum() and not '_' in v and not '-' in v:
+            raise ValueError('Les champs doivent être alphanumériques ou contenir des underscores/tirets')
+        return v
 
 class ScenarioModel(BaseModel):
     id: str
@@ -107,10 +148,61 @@ scenarios = [
     }
 ]
 
+# Middleware de sécurité
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    # Journaliser la requête
+    request_id = str(uuid.uuid4())
+    client_ip = request.client.host
+    logger.info(f"Requête {request_id} - Méthode: {request.method} - URL: {request.url} - IP: {client_ip}")
+    
+    # Continuer avec la requête
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    
+    # Journaliser la réponse
+    logger.info(f"Requête {request_id} - Statut: {response.status_code} - Temps: {process_time:.4f}s")
+    
+    # Ajouter des en-têtes de sécurité
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    
+    return response
+
 # Fonction de vérification d'API key
-async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
-    if api_key != API_KEY and API_KEY != "default-key":
-        raise HTTPException(status_code=401, detail="Invalid API key")
+async def verify_api_key(api_key: str = Depends(api_key_header), request: Request = None):
+    if not api_key:
+        logger.warning(f"Tentative d'accès sans API key depuis {request.client.host if request else 'inconnu'}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key manquante",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    
+    if api_key != API_KEY:
+        # Incrémenter le compteur de tentatives échouées
+        client_ip = request.client.host if request else "inconnu"
+        if client_ip not in failed_attempts:
+            failed_attempts[client_ip] = {"count": 0, "lockout_until": datetime.now()}
+        
+        failed_attempts[client_ip]["count"] += 1
+        
+        # Si trop de tentatives, bloquer temporairement
+        if failed_attempts[client_ip]["count"] >= 5:
+            failed_attempts[client_ip]["lockout_until"] = datetime.now() + timedelta(minutes=15)
+            logger.warning(f"IP {client_ip} bloquée pendant 15 minutes après 5 tentatives échouées")
+        
+        logger.warning(f"Tentative d'accès avec API key invalide depuis {client_ip}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key invalide",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    
     return api_key
 
 # Routes
@@ -155,7 +247,7 @@ async def get_livekit_token(request: LiveKitTokenRequest):
         raise HTTPException(status_code=500, detail=f"Erreur lors de la génération du token LiveKit: {str(e)}")
 
 @app.post("/api/session/start")
-async def start_session(request: SessionStartRequest):
+async def start_session(request: SessionStartRequest, api_key: str = Depends(verify_api_key)):
     """Démarre une nouvelle session (ancien endpoint)."""
     try:
         # Vérifier que le scénario existe
@@ -169,15 +261,22 @@ async def start_session(request: SessionStartRequest):
         # Créer une room LiveKit (simulation)
         room_name = f"eloquence-{session_id}"
         
-        # Stocker les informations de session
+        # Stocker les informations de session avec données de sécurité
         active_sessions[session_id] = {
             "user_id": request.user_id,
             "language": request.language,
             "scenario_id": request.scenario_id,
             "is_multi_agent": request.is_multi_agent,
             "room_name": room_name,
-            "created_at": time.time()
+            "created_at": time.time(),
+            "last_activity": time.time(),
+            "ip_address": request.client.host,
+            "user_agent": request.headers.get("User-Agent", "Unknown"),
+            "session_token": secrets.token_hex(16)
         }
+        
+        # Journaliser la création de session
+        logger.info(f"Session LiveKit {session_id} créée pour l'utilisateur {request.user_id} avec le scénario {request.scenario_id}")
         
         # Générer un message initial basé sur le scénario
         initial_message = ""
@@ -204,18 +303,28 @@ async def start_session(request: SessionStartRequest):
         raise HTTPException(status_code=500, detail=f"Erreur lors du démarrage de la session: {str(e)}")
 
 @app.post("/api/session/{session_id}/end")
-async def end_session(session_id: str):
+async def end_session(session_id: str, api_key: str = Depends(verify_api_key), request: Request = None):
     """Termine une session existante (ancien endpoint)."""
     try:
         # Vérifier que la session existe
         if session_id not in active_sessions:
+            logger.warning(f"Tentative de terminer une session inexistante: {session_id}")
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' non trouvée.")
         
         # Récupérer les informations de session
         session_info = active_sessions[session_id]
         
+        # Vérifier que l'IP qui termine la session est la même que celle qui l'a créée
+        client_ip = request.client.host if request else "inconnu"
+        if client_ip != session_info.get("ip_address") and client_ip not in ["127.0.0.1", "::1"]:
+            logger.warning(f"Tentative de terminer la session {session_id} depuis une IP non autorisée: {client_ip}")
+            raise HTTPException(status_code=403, detail="Vous n'êtes pas autorisé à terminer cette session.")
+        
         # Supprimer la session
         del active_sessions[session_id]
+        
+        # Journaliser la terminaison de session
+        logger.info(f"Session {session_id} terminée avec succès")
         
         # Retourner un message de succès
         return {"status": "success", "message": f"Session {session_id} terminée avec succès"}
@@ -231,11 +340,38 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     try:
         # Vérifier que la session existe
         if session_id not in active_sessions:
+            logger.warning(f"Tentative de connexion WebSocket à une session inexistante: {session_id}")
             await websocket.close(code=1008, reason=f"Session '{session_id}' non trouvée.")
+            return
+        
+        # Récupérer les informations de session
+        session_info = active_sessions[session_id]
+        
+        # Vérifier l'origine de la connexion WebSocket
+        client_ip = websocket.client.host if hasattr(websocket, 'client') else "inconnu"
+        headers = websocket.headers if hasattr(websocket, 'headers') else {}
+        origin = headers.get("origin", "unknown")
+        
+        # Vérifier si l'origine est autorisée
+        origin_allowed = False
+        for allowed_origin in ALLOWED_ORIGINS:
+            if origin.startswith(allowed_origin):
+                origin_allowed = True
+                break
+        
+        if not origin_allowed and origin != "unknown":
+            logger.warning(f"Tentative de connexion WebSocket depuis une origine non autorisée: {origin}")
+            await websocket.close(code=1008, reason="Origine non autorisée")
             return
         
         # Accepter la connexion WebSocket
         await websocket.accept()
+        
+        # Mettre à jour l'heure de dernière activité
+        active_sessions[session_id]["last_activity"] = time.time()
+        
+        # Journaliser la connexion WebSocket
+        logger.info(f"Connexion WebSocket établie pour la session {session_id} depuis {client_ip}")
         
         # Envoyer un message de bienvenue
         await websocket.send_json({
@@ -247,6 +383,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         while True:
             # Recevoir un message du client
             data = await websocket.receive_text()
+            
+            # Mettre à jour l'heure de dernière activité
+            active_sessions[session_id]["last_activity"] = time.time()
             
             try:
                 message = json.loads(data)
@@ -300,15 +439,22 @@ async def create_session(request: SessionStartRequest, api_key: str = Depends(ve
         # Créer une room LiveKit
         room_name = f"eloquence-{session_id}"
         
-        # Stocker les informations de session
+        # Stocker les informations de session avec données de sécurité
         active_sessions[session_id] = {
             "user_id": request.user_id,
             "language": request.language,
             "scenario_id": request.scenario_id,
             "is_multi_agent": request.is_multi_agent,
             "room_name": room_name,
-            "created_at": time.time()
+            "created_at": time.time(),
+            "last_activity": time.time(),
+            "ip_address": request.client.host,
+            "user_agent": request.headers.get("User-Agent", "Unknown"),
+            "session_token": secrets.token_hex(16)
         }
+        
+        # Journaliser la création de session
+        logger.info(f"Session LiveKit {session_id} créée pour l'utilisateur {request.user_id} avec le scénario {request.scenario_id}")
         
         # Générer un token LiveKit
         now = int(time.time())
@@ -345,18 +491,28 @@ async def create_session(request: SessionStartRequest, api_key: str = Depends(ve
         raise HTTPException(status_code=500, detail=f"Erreur lors de la création de la session: {str(e)}")
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str, api_key: str = Depends(verify_api_key)):
+async def delete_session(session_id: str, api_key: str = Depends(verify_api_key), request: Request = None):
     """Supprime une session existante (nouvel endpoint)."""
     try:
         # Vérifier que la session existe
         if session_id not in active_sessions:
+            logger.warning(f"Tentative de supprimer une session inexistante: {session_id}")
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' non trouvée.")
         
         # Récupérer les informations de session
         session_info = active_sessions[session_id]
         
+        # Vérifier que l'IP qui supprime la session est la même que celle qui l'a créée
+        client_ip = request.client.host if request else "inconnu"
+        if client_ip != session_info.get("ip_address") and client_ip not in ["127.0.0.1", "::1"]:
+            logger.warning(f"Tentative de supprimer la session {session_id} depuis une IP non autorisée: {client_ip}")
+            raise HTTPException(status_code=403, detail="Vous n'êtes pas autorisé à supprimer cette session.")
+        
         # Supprimer la session
         del active_sessions[session_id]
+        
+        # Journaliser la suppression de session
+        logger.info(f"Session {session_id} supprimée avec succès")
         
         # Retourner un message de succès
         return {"status": "success", "message": f"Session {session_id} supprimée avec succès"}
@@ -366,8 +522,36 @@ async def delete_session(session_id: str, api_key: str = Depends(verify_api_key)
         logger.error(f"Erreur lors de la suppression de la session: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur lors de la suppression de la session: {str(e)}")
 
+# Tâche de nettoyage des sessions inactives
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(cleanup_inactive_sessions())
+
+async def cleanup_inactive_sessions():
+    """Nettoie les sessions inactives périodiquement."""
+    while True:
+        try:
+            current_time = time.time()
+            sessions_to_remove = []
+            
+            for session_id, session_info in active_sessions.items():
+                # Supprimer les sessions inactives depuis plus de 30 minutes
+                if current_time - session_info.get("last_activity", session_info.get("created_at", 0)) > 1800:  # 30 minutes
+                    sessions_to_remove.append(session_id)
+            
+            # Supprimer les sessions
+            for session_id in sessions_to_remove:
+                logger.info(f"Nettoyage de la session inactive {session_id}")
+                del active_sessions[session_id]
+            
+            # Attendre 5 minutes avant la prochaine vérification
+            await asyncio.sleep(300)
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage des sessions inactives: {e}")
+            await asyncio.sleep(60)  # Attendre 1 minute en cas d'erreur
+
 # Démarrer le serveur si exécuté directement
 if __name__ == "__main__":
     import uvicorn
-    logger.info(f"Démarrage de l'API sur le port {API_PORT}")
+    logger.info(f"Démarrage de l'API sécurisée sur le port {API_PORT}")
     uvicorn.run(app, host="0.0.0.0", port=API_PORT)
