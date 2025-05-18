@@ -34,9 +34,10 @@ logger = logging.getLogger("eloquence-api")
 load_dotenv(".env.local")
 
 # Configuration LiveKit
-LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880") # URL interne pour le backend si nécessaire
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
+PUBLIC_LIVEKIT_URL = os.environ.get("PUBLIC_LIVEKIT_URL", "ws://localhost:7880") # URL publique pour le frontend
 
 # Configuration API
 API_KEY = os.environ.get("API_KEY", "default-key")
@@ -175,15 +176,22 @@ async def security_middleware(request: Request, call_next):
 
 # Fonction de vérification d'API key
 async def verify_api_key(api_key: str = Depends(api_key_header), request: Request = None):
+    client_ip = request.client.host if request else "inconnu"
+    
     if not api_key:
-        logger.warning(f"Tentative d'accès sans API key depuis {request.client.host if request else 'inconnu'}")
+        logger.warning(f"Tentative d'accès sans API key depuis {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key manquante",
             headers={"WWW-Authenticate": "ApiKey"},
         )
     
-    if api_key != API_KEY:
+    # Journaliser la clé API reçue (pour le débogage)
+    logger.info(f"API Key reçue depuis {client_ip}: |{api_key}|") # Ajout de délimiteurs
+    logger.info(f"API Key attendue (backend): |{API_KEY}|") # Ajout de délimiteurs
+    
+    # Comparer après avoir supprimé les espaces blancs en trop
+    if api_key.strip() != API_KEY.strip():
         # Incrémenter le compteur de tentatives échouées
         client_ip = request.client.host if request else "inconnu"
         if client_ip not in failed_attempts:
@@ -482,7 +490,7 @@ async def create_session(request: SessionStartRequest, api_key: str = Depends(ve
             "session_id": session_id,
             "room_name": room_name,
             "token": token,
-            "url": LIVEKIT_URL
+            "url": PUBLIC_LIVEKIT_URL # Utiliser l'URL publique ici
         }
     except HTTPException as e:
         raise e
