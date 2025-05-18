@@ -1,0 +1,65 @@
+{
+  "id": "entretien",
+  "name": "Entretien d'embauche",
+  "description": "Scénario d'entretien d'embauche pour tester l'API",
+  "language": "fr",
+  "initial_prompt": "Vous êtes un candidat à un entretien d'embauche. Répondez aux questions du recruteur de manière professionnelle et concise.",
+  "agents": [
+    {
+      "id": "recruteur",
+      "name": "Recruteur",
+      "role": "interviewer",
+      "description": "Un recruteur professionnel qui pose des questions pertinentes",
+      "personality": "Professionnel, bienveillant, attentif",
+      "voice": {
+        "id": "fr-FR-standard-A",
+        "gender": "female",
+        "emotion": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "introduction",
+      "type": "dialogue",
+      "agent_id": "recruteur",
+      "content": "Bonjour et bienvenue à cet entretien. Pouvez-vous vous présenter brièvement ?",
+      "next_step": "experience"
+    },
+    {
+      "id": "experience",
+      "type": "dialogue",
+      "agent_id": "recruteur",
+      "content": "Parlez-moi de votre expérience professionnelle.",
+      "next_step": "competences"
+    },
+    {
+      "id": "competences",
+      "type": "dialogue",
+      "agent_id": "recruteur",
+      "content": "Quelles sont vos principales compétences techniques ?",
+      "next_step": "motivation"
+    },
+    {
+      "id": "motivation",
+      "type": "dialogue",
+      "agent_id": "recruteur",
+      "content": "Qu'est-ce qui vous motive à rejoindre notre entreprise ?",
+      "next_step": "questions"
+    },
+    {
+      "id": "questions",
+      "type": "dialogue",
+      "agent_id": "recruteur",
+      "content": "Avez-vous des questions à me poser ?",
+      "next_step": "conclusion"
+    },
+    {
+      "id": "conclusion",
+      "type": "dialogue",
+      "agent_id": "recruteur",
+      "content": "Merci pour cet échange. Nous vous recontacterons prochainement pour vous donner notre réponse.",
+      "next_step": null
+    }
+  ]
+}

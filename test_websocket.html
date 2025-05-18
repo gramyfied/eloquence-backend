@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test WebSocket Eloquence</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .card {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 15px;
+            background-color: #f9f9f9;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .log {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #f5f5f5;
+            font-family: monospace;
+        }
+        .status {
+            font-weight: bold;
+        }
+        .status.connected {
+            color: green;
+        }
+        .status.disconnected {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test WebSocket Eloquence</h1>
+        
+        <div class="card">
+            <h2>Configuration</h2>
+            <div>
+                <label for="session-id">ID de session:</label>
+                <input type="text" id="session-id" style="width: 300px;" placeholder="Entrez l'ID de session">
+                <button id="connect-btn">Connecter</button>
+                <button id="disconnect-btn" disabled>Déconnecter</button>
+            </div>
+            <div class="status disconnected" id="status">Déconnecté</div>
+        </div>
+        
+        <div class="card">
+            <h2>Audio</h2>
+            <div class="controls">
+                <button id="record-btn" disabled>Enregistrer</button>
+                <button id="stop-btn" disabled>Arrêter</button>
+                <button id="play-btn" disabled>Jouer</button>
+            </div>
+            <audio id="audio-player" controls style="width: 100%;" disabled></audio>
+        </div>
+        
+        <div class="card">
+            <h2>Messages</h2>
+            <div class="log" id="message-log"></div>
+        </div>
+    </div>
+
+    <script>
+        // Éléments DOM
+        const sessionIdInput = document.getElementById('session-id');
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const statusEl = document.getElementById('status');
+        const recordBtn = document.getElementById('record-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const playBtn = document.getElementById('play-btn');
+        const audioPlayer = document.getElementById('audio-player');
+        const messageLog = document.getElementById('message-log');
+        
+        // Variables globales
+        let websocket = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let audioBlob = null;
+        
+        // Fonctions utilitaires
+        function logMessage(message, type = 'info') {
+            const logEntry = document.createElement('div');
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEntry.className = `log-entry ${type}`;
+            messageLog.appendChild(logEntry);
+            messageLog.scrollTop = messageLog.scrollHeight;
+        }
+        
+        // Gestion du WebSocket
+        connectBtn.addEventListener('click', () => {
+            const sessionId = sessionIdInput.value.trim();
+            if (!sessionId) {
+                logMessage('Veuillez entrer un ID de session valide', 'error');
+                return;
+            }
+            
+            try {
+                const wsUrl = `ws://${window.location.host}/ws/${sessionId}`;
+                logMessage(`Connexion à ${wsUrl}...`);
+                
+                websocket = new WebSocket(wsUrl);
+                
+                websocket.onopen = () => {
+                    statusEl.textContent = 'Connecté';
+                    statusEl.className = 'status connected';
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                    recordBtn.disabled = false;
+                    logMessage('Connexion WebSocket établie');
+                };
+                
+                websocket.onclose = (event) => {
+                    statusEl.textContent = 'Déconnecté';
+                    statusEl.className = 'status disconnected';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    recordBtn.disabled = true;
+                    stopBtn.disabled = true;
+                    logMessage(`Connexion WebSocket fermée: ${event.code} ${event.reason}`);
+                };
+                
+                websocket.onerror = (error) => {
+                    logMessage(`Erreur WebSocket: ${error}`, 'error');
+                };
+                
+                websocket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        logMessage(`Message reçu: ${JSON.stringify(data)}`);
+                        
+                        // Si le message contient une URL audio, la jouer
+                        if (data.audio_url) {
+                            audioPlayer.src = data.audio_url;
+                            audioPlayer.play();
+                        }
+                    } catch (e) {
+                        // Si ce n'est pas du JSON, c'est peut-être un blob audio
+                        logMessage('Données binaires reçues (probablement audio)');
+                        const blob = new Blob([event.data], { type: 'audio/wav' });
+                        const url = URL.createObjectURL(blob);
+                        audioPlayer.src = url;
+                        audioPlayer.play();
+                    }
+                };
+            } catch (error) {
+                logMessage(`Erreur lors de la création du WebSocket: ${error}`, 'error');
+            }
+        });
+        
+        disconnectBtn.addEventListener('click', () => {
+            if (websocket) {
+                websocket.close();
+                websocket = null;
+            }
+        });
+        
+        // Gestion de l'enregistrement audio
+        recordBtn.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = () => {
+                    audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    audioPlayer.src = audioUrl;
+                    playBtn.disabled = false;
+                    
+                    // Envoyer l'audio au serveur
+                    if (websocket && websocket.readyState === WebSocket.OPEN) {
+                        logMessage('Envoi de l\'audio au serveur...');
+                        websocket.send(audioBlob);
+                    }
+                };
+                
+                mediaRecorder.start();
+                recordBtn.disabled = true;
+                stopBtn.disabled = false;
+                logMessage('Enregistrement audio démarré');
+            } catch (error) {
+                logMessage(`Erreur lors de l'accès au microphone: ${error}`, 'error');
+            }
+        });
+        
+        stopBtn.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                recordBtn.disabled = false;
+                stopBtn.disabled = true;
+                logMessage('Enregistrement audio arrêté');
+            }
+        });
+        
+        playBtn.addEventListener('click', () => {
+            audioPlayer.play();
+        });
+        
+        // Initialisation
+        window.addEventListener('load', () => {
+            // Pré-remplir l'ID de session s'il est dans l'URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const sessionId = urlParams.get('session_id');
+            if (sessionId) {
+                sessionIdInput.value = sessionId;
+            }
+        });
+    </script>
+</body>
+</html>

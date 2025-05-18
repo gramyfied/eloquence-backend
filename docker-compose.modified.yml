@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # Service principal FastAPI
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data # Partage des données (audio, feedback parsé)
+      - ./logs:/app/logs
+      - ./core/config.py:/app/core/config.py # Monter le fichier config.py modifié
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379 # Port interne de Redis
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # URLs internes utilisant les noms de service Docker Compose
+      - ASR_API_URL=http://asr-service:8001/asr
+      - LLM_LOCAL_API_URL=http://llm-service:8000 # URL pour vLLM/TGI
+      - TTS_API_URL=http://tts-service:5002/api/tts
+      - KALDI_CONTAINER_NAME=kaldi_eloquence # Nom fixe pour docker exec
+      - DEBUG=true
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+    deploy:
+      resources:
+        limits:
+          memory: 8g # Limite de mémoire à 8GB
+
+  # Redis pour cache et files d'attente
+  redis:
+    image: redis:7
+    ports:
+      - "6380:6379" # Exposer sur 6380 sur l'hôte, mais utiliser 6379 en interne
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+volumes:
+  redis_data:
+
+networks:
+  eloquence-network:
+    driver: bridge

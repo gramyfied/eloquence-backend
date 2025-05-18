@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  # Service principal FastAPI
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data # Partage des données (audio, feedback parsé)
+      - ./logs:/app/logs
+      - ./app:/app/app # Monter le répertoire app
+      - ./core:/app/core # Monter le répertoire core
+      - ./services:/app/services # Monter le répertoire services
+      - ./examples:/app/examples # Monter le répertoire examples
+      - ./requirements.txt:/app/requirements.txt # Monter le fichier requirements.txt
+      - ./app_wrapper.py:/app/app_wrapper.py # Monter le fichier app_wrapper.py
+      - ./entrypoint.py:/app/entrypoint.py # Monter le fichier entrypoint.py
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379 # Port interne de Redis
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # URLs internes utilisant les noms de service Docker Compose
+      # (Supposant que ces services sont définis ailleurs ou seront ajoutés)
+      - ASR_API_URL=http://asr-service:8001/asr
+      - LLM_LOCAL_API_URL=http://llm-service:8000 # URL pour vLLM/TGI
+      - TTS_API_URL=http://tts-service:5002/api/tts
+      - KALDI_CONTAINER_NAME=kaldi_eloquence # Nom fixe pour docker exec
+      - DEBUG=true
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+    deploy:
+      resources:
+        limits:
+          memory: 8g # Limite de mémoire à 8GB
+
+  # Redis pour cache et files d'attente
+  redis:
+    image: redis:7
+    ports:
+      - "6380:6379" # Exposer sur 6380 sur l'hôte, mais utiliser 6379 en interne
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+  # Celery Worker pour tâches asynchrones
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A core.celery_app worker --loglevel=info
+    volumes:
+      - ./data:/app/data # Accès aux données (audio, feedback parsé)
+      - ./logs:/app/logs
+      # Monter les mêmes volumes que Kaldi pour que le worker puisse écrire/lire
+      - ./data/audio:/audio # Chemin où le worker écrit les WAV temporaires
+      - ./data/feedback/kaldi_raw:/kaldi_output # Chemin où le worker lit les résultats bruts
+      - ./.env:/app/.env # Monter explicitement le fichier .env dans le conteneur
+      - ./app:/app/app # Monter le répertoire app
+      - ./core:/app/core # Monter le répertoire core
+      - ./services:/app/services # Monter le répertoire services
+      - ./requirements.txt:/app/requirements.txt # Monter le fichier requirements.txt
+    env_file:
+      - .env.celery
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379 # Port interne de Redis
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - KALDI_CONTAINER_NAME=kaldi_eloquence # Nom fixe pour docker exec
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    depends_on:
+      - redis
+      - kaldi # Dépend du service Kaldi pour les volumes partagés
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+  # Service Kaldi
+  kaldi:
+    image: kaldiasr/kaldi:latest
+    container_name: ${KALDI_CONTAINER_NAME:-kaldi_eloquence} # Nom fixe important pour docker exec
+    volumes:
+      # Monter les répertoires de l'hôte où le worker écrit/lit
+      - ./data/audio:/audio # Les fichiers audio WAV lus par Kaldi
+      - ./data/feedback/kaldi_raw:/kaldi_output # Où Kaldi écrit ses résultats bruts
+      # Optionnel: Monter les modèles Kaldi depuis l'hôte si non inclus dans l'image
+      # - ./kaldi_models/egs/librispeech:/kaldi/egs/librispeech
+    # Garder le conteneur en vie (sinon il s'arrête car pas de commande principale)
+    command: tail -f /dev/null
+    restart: unless-stopped
+    networks:
+      - eloquence-network
+
+# Définir les services IA
+  asr-service:
+    build:
+      context: ./services/whisper # Utiliser le Dockerfile local
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000" # Port 8001 sur l'hôte mappé sur le port 8000 du conteneur
+    networks:
+      - eloquence-network
+    restart: unless-stopped
+    # Ajoutez ici la configuration GPU si nécessaire (dépend de votre Dockerfile et environnement)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # Ajoutez les volumes pour les modèles si nécessaire
+    # volumes:
+    #   - ./data/models/whisper:/root/.cache/faster_whisper
+
+#  llm-service: # Le LLM est maintenant externe (Scaleway), donc ce service local n'est plus nécessaire
+#    image: your-vllm-mistral-image
+#    ports:
+#      - "8002:8000" # Port interne vLLM souvent 8000
+#    networks:
+#      - eloquence-network
+#    # ... config GPU, volumes modèles ...
+
+  tts-service:
+    build:
+      context: ./services/tts # Utiliser le Dockerfile local
+      dockerfile: Dockerfile
+    ports:
+      - "5002:5002" # Port exposé sur l'hôte
+    networks:
+      - eloquence-network
+    restart: unless-stopped
+    environment:
+      - TTS_USE_XTTS=true
+    # Ajoutez ici la configuration GPU si nécessaire
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # Ajoutez les volumes pour les modèles si nécessaire
+    # volumes:
+    #   - ./data/models/tts:/root/.local/share/tts
+
+volumes:
+  redis_data:
+
+networks:
+  eloquence-network:
+    driver: bridge
