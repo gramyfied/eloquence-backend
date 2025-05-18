@@ -1,0 +1,1 @@
+# Ce fichier permet de faire du répertoire adapters un package Python

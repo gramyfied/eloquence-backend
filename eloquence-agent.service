@@ -1,0 +1,17 @@
+[Unit]
+Description=Eloquence LiveKit Agent
+After=network.target livekit.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/eloquence_backend_py
+ExecStart=/home/ubuntu/eloquence_backend_py/start.sh
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=LIVEKIT_URL=ws://localhost:7880
+Environment=LIVEKIT_API_KEY=devkey
+Environment=LIVEKIT_API_SECRET=secret
+
+[Install]
+WantedBy=multi-user.target

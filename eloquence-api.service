@@ -1,0 +1,14 @@
+[Unit]
+Description=Eloquence API
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/eloquence_backend_py
+ExecStart=/usr/bin/python3 api.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
