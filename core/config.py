@@ -143,6 +143,11 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = os.getenv("ENABLE_METRICS", "True").lower() == "true"
     METRICS_ENDPOINT: str = os.getenv("METRICS_ENDPOINT", "/api/metrics")
 
+    # Configuration LiveKit (sera chargée depuis .env ou .env.local par Pydantic)
+    LIVEKIT_HOST: Optional[str] = Field(default="wss://livekit.xn--loquence-90a.com", env="PUBLIC_LIVEKIT_URL")
+    LIVEKIT_API_KEY: Optional[str] = Field(default=None, env="LIVEKIT_API_KEY")
+    LIVEKIT_API_SECRET: Optional[str] = Field(default=None, env="LIVEKIT_API_SECRET")
+
     class Config:
         env_file = '.env'
         env_file_encoding = 'utf-8'

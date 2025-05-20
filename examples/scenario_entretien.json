@@ -4,6 +4,10 @@
   "description": "Scénario d'entretien d'embauche pour tester l'API",
   "language": "fr",
   "initial_prompt": "Vous êtes un candidat à un entretien d'embauche. Répondez aux questions du recruteur de manière professionnelle et concise.",
+  "initial_message": {
+    "text": "Bonjour et bienvenue à cet entretien. Pouvez-vous vous présenter brièvement ?",
+    "audio_url": ""
+  },
   "agents": [
     {
       "id": "recruteur",

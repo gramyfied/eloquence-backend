@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from livekit import api # Ajout pour la génération de token LiveKit
 from core.config import settings # S'assurer que cet import est bien actif
-from core.auth import get_api_key
+# from core.auth import get_api_key # Supprimé car non utilisé et cause une ImportError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -38,7 +38,7 @@ class SessionStartRequest(BaseModel):
 
 class SessionStartResponse(BaseModel):
     session_id: str
-    websocket_url: str # Pour le WebSocket simple
+    websocket_url: Optional[str] = None # Pour le WebSocket simple, rendu optionnel
     initial_message: Dict[str, str]
     livekit_url: Optional[str] = None
     livekit_token: Optional[str] = None
@@ -148,7 +148,7 @@ async def start_session(
 
     response_data = SessionStartResponse( # Crée l'objet réponse
         session_id=session_id,
-        websocket_url=websocket_url,
+        # websocket_url=websocket_url, # Supprimé pour forcer le flux LiveKit
         initial_message=initial_message,
         livekit_url=lk_host if livekit_token_generated else None, # CORRIGÉ: Utilise le champ 'livekit_url'
         livekit_token=livekit_token_generated, # CORRIGÉ: Utilise le champ 'livekit_token'

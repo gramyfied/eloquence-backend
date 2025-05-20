@@ -1,0 +1,68 @@
+{
+  "id": "entretien_interactif",
+  "name": "Entretien d'embauche interactif",
+  "description": "Scénario d'entretien d'embauche interactif avec feedback potentiel.",
+  "language": "fr",
+  "initial_message": {
+    "text": "Bonjour et bienvenue ! Nous allons commencer cet entretien interactif. Pour commencer, parlez-moi de vous et de ce qui vous attire dans ce rôle.",
+    "audio_url": ""
+  },
+  "agents": [
+    {
+      "id": "recruteur_interactif",
+      "name": "Sophie Martin",
+      "role": "interviewer",
+      "description": "Une recruteuse expérimentée cherchant à évaluer vos compétences et votre adéquation culturelle.",
+      "personality": "Professionnelle, engageante, curieuse",
+      "voice": {
+        "id": "fr-FR-standard-B",
+        "gender": "female",
+        "emotion": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "introduction_candidat",
+      "type": "dialogue",
+      "agent_id": "recruteur_interactif",
+      "content": "Merci pour cette présentation. Maintenant, pourriez-vous me décrire une situation professionnelle difficile que vous avez rencontrée et comment vous l'avez surmontée ?",
+      "next_step": "analyse_situation"
+    },
+    {
+      "id": "analyse_situation",
+      "type": "dialogue",
+      "agent_id": "recruteur_interactif",
+      "content": "Intéressant. Quelles compétences clés pensez-vous avoir mobilisées pour gérer cette situation ?",
+      "next_step": "points_forts"
+    },
+    {
+      "id": "points_forts",
+      "type": "dialogue",
+      "agent_id": "recruteur_interactif",
+      "content": "Quels sont, selon vous, vos trois principaux points forts pour ce poste et comment pourraient-ils bénéficier à notre équipe ?",
+      "next_step": "axes_amelioration"
+    },
+    {
+      "id": "axes_amelioration",
+      "type": "dialogue",
+      "agent_id": "recruteur_interactif",
+      "content": "Personne n'est parfait. Sur quel axe d'amélioration travaillez-vous actuellement ?",
+      "next_step": "questions_candidat"
+    },
+    {
+      "id": "questions_candidat",
+      "type": "dialogue",
+      "agent_id": "recruteur_interactif",
+      "content": "Voilà qui conclut mes questions principales. Avez-vous des questions à me poser concernant le poste, l'entreprise ou l'équipe ?",
+      "next_step": "conclusion_entretien"
+    },
+    {
+      "id": "conclusion_entretien",
+      "type": "dialogue",
+      "agent_id": "recruteur_interactif",
+      "content": "Merci beaucoup pour cet échange et pour vos questions. Nous avons apprécié d'en apprendre plus sur vous. Nous vous recontacterons prochainement.",
+      "next_step": null
+    }
+  ]
+}

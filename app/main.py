@@ -16,6 +16,7 @@ from app.routes.monitoring import router as monitoring_router
 from app.routes.scenarios import router as scenarios_router
 from app.routes.websocket import router as websocket_router
 from app.routes.tts_cache import router as tts_cache_router
+from app.routes.livekit import router as livekit_router # AJOUTÉ : Import du routeur LiveKit
 from core.database import init_db
 from core.config import settings
 
@@ -126,3 +127,4 @@ app.include_router(monitoring_router, prefix="/api", tags=["monitoring"])
 app.include_router(scenarios_router, prefix="/api", tags=["scenarios"])
 app.include_router(websocket_router, tags=["websocket"]) # Ajouter le router WebSocket
 app.include_router(tts_cache_router, tags=["tts_cache"]) # Ajouter le router TTS Cache
+app.include_router(livekit_router, prefix="/livekit", tags=["livekit"]) # AJOUTÉ : Inclusion du routeur LiveKit
